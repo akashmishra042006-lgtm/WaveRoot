@@ -96,11 +96,14 @@ def vcd_from_mock(trace: MockTrace, *, timescale: str = "1 ps", divisor: int = 1
         for sample in signal.samples:
             events.setdefault(sample.time_ps, []).append(change(code, sample.value.bits))
     lines.append("$enddefinitions $end")
-    events.setdefault(trace.coverage.end_ps, [])
     for time_ps in sorted(events):
         assert time_ps % divisor == 0
         lines.append(f"#{time_ps // divisor}")
         lines += events[time_ps]
+    # Spec 9: the final timestamp only closes the previous timestep, so one tick
+    # past the mock's coverage end makes the VCD cover exactly as far (for 1 ps
+    # ticks) or to the end of that tick (coarser timescales).
+    lines.append(f"#{trace.coverage.end_ps // divisor + 1}")
     return "\n".join(lines) + "\n"
 
 
@@ -210,7 +213,9 @@ def test_equivalent_timescales_give_identical_results(fixture: MockFixture) -> N
         other = VcdWaveformProvider.from_text(
             vcd_from_mock(fixture.trace, timescale=timescale, divisor=divisor)
         )
-        assert other.get_coverage() == reference.get_coverage()
+        # The closing timestamp is one tick past 100 ns, so coverage ends where
+        # that tick ends; every covered instant up to 100 ns agrees exactly.
+        assert other.get_coverage() == TraceCoverage(start_ps=0, end_ps=100000 + divisor - 1)
         assert other.get_window_slice(paths, 0, 100001) == reference.get_window_slice(paths, 0, 100001)
 
 
@@ -241,7 +246,7 @@ def test_provider_rejects_malformed_and_out_of_range_queries(fifo: VcdWaveformPr
 
 def test_femtosecond_traces_are_exact_or_rejected() -> None:
     body = "$scope module top $end\n$var wire 1 ! a $end\n$upscope $end\n$enddefinitions $end\n"
-    whole = VcdWaveformProvider.from_text(f"$timescale 1 fs $end\n{body}#0\n0!\n#5000\n1!\n#9000\n")
+    whole = VcdWaveformProvider.from_text(f"$timescale 1 fs $end\n{body}#0\n0!\n#5000\n1!\n#10000\n")
     assert whole.get_coverage() == TraceCoverage(start_ps=0, end_ps=9)
     assert whole.get_value_at("top.a", 5, phase=BEFORE) == lv("0")
     assert whole.get_value_at("top.a", 5) == lv("1")
@@ -259,7 +264,7 @@ def test_large_timestamps_stay_exact() -> None:
     )
     provider = VcdWaveformProvider.from_text(text)
     edge = big * 10**12
-    assert provider.get_coverage().end_ps == (big + 1) * 10**12
+    assert provider.get_coverage().end_ps == (big + 1) * 10**12 - 1
     assert provider.get_clock_edges("top.a", 0, edge + 1) == (edge,)
     assert provider.get_value_at("top.a", edge - 1) == lv("0")
     window = provider.get_window_slice(["top.a"], edge - 1, edge + 2)
@@ -380,7 +385,7 @@ r2.5 r
 
 
 def test_final_value_per_timestamp_wins_and_repeated_timestamps_merge() -> None:
-    text = HEADER + '#0\n0!\nb0 "\n#10\nb1 "\nb10 "\n#10\nb11 "\n#20\nb11 "\n#30\n'
+    text = HEADER + '#0\n0!\nb0 "\n#10\nb1 "\nb10 "\n#10\nb11 "\n#20\nb11 "\n#30\n#31\n'
     provider = VcdWaveformProvider.from_text(text)
     assert provider.get_value_at("top.data", 10000, phase=BEFORE) == lv("00000000")
     assert provider.get_value_at("top.data", 10000) == lv("00000011")
@@ -390,7 +395,7 @@ def test_final_value_per_timestamp_wins_and_repeated_timestamps_merge() -> None:
 
 
 def test_clock_glitch_at_one_timestamp_is_indeterminate() -> None:
-    text = HEADER + "#0\n0!\n#5\n1!\n#10\n0!\n#15\n1!\n0!\n#25\n1!\n#30\n0!\n#35\n"
+    text = HEADER + "#0\n0!\n#5\n1!\n#10\n0!\n#15\n1!\n0!\n#25\n1!\n#30\n0!\n#35\n#36\n"
     provider = VcdWaveformProvider.from_text(text)
     assert provider.get_clock_edges("top.clk", 0, 15000) == (5000,)
     assert provider.get_clock_edges("top.clk", 15001, 35001) == (25000,)
@@ -400,7 +405,7 @@ def test_clock_glitch_at_one_timestamp_is_indeterminate() -> None:
 
 
 def test_unknown_clock_transitions_pauses_and_falling_edges() -> None:
-    text = HEADER + "#0\nx!\n#5\n1!\n#10\n0!\n#15\n1!\n#20\nx!\n#25\n0!\n#30\n1!\n#400\n0!\n#405\n1!\n#410\n"
+    text = HEADER + "#0\nx!\n#5\n1!\n#10\n0!\n#15\n1!\n#20\nx!\n#25\n0!\n#30\n1!\n#400\n0!\n#405\n1!\n#410\n#411\n"
     provider = VcdWaveformProvider.from_text(text)
     assert provider.get_clock_edges("top.clk", 0, 410001) == (15000, 30000, 405000)
     assert provider.get_clock_edges("top.clk", 0, 410001, edge=ClockEdge.FALLING) == (10000, 400000)
@@ -434,6 +439,7 @@ $end
 #60
 0!
 #70
+#71
 """
 
 
@@ -465,10 +471,12 @@ def test_dump_gap_is_unavailable_and_resume_is_restated() -> None:
 
 def test_trailing_dumpoff_makes_the_rest_of_the_trace_unavailable() -> None:
     provider = VcdWaveformProvider.from_text(HEADER + '#0\n0!\nb1 "\n#10\n$dumpoff\n$end\n#40\n')
-    assert provider.get_coverage() == TraceCoverage(start_ps=0, end_ps=40000)
-    assert provider.trace.unavailable == (TimeInterval(start_ps=10000, end_ps=40001),)
+    # Spec 9: coverage ends 1 ps before the final timestamp, and the gap runs to
+    # the end of coverage: [10 ns, end_ps + 1).
+    assert provider.get_coverage() == TraceCoverage(start_ps=0, end_ps=39999)
+    assert provider.trace.unavailable == (TimeInterval(start_ps=10000, end_ps=40000),)
     with pytest.raises(DataUnavailableError):
-        provider.get_value_at("top.clk", 40000)
+        provider.get_value_at("top.clk", 39999)
 
 
 def test_dumpon_must_restate_every_signal() -> None:
@@ -546,7 +554,7 @@ def test_lookups_and_windows_agree_with_a_linear_scan(records: list[tuple[int, s
     lines = ["$timescale 1ps $end", "$scope module top $end", "$var wire 4 ! v [3:0] $end", "$upscope $end", "$enddefinitions $end", "#0"]
     for time, bits in records:
         lines += [f"#{time}", f"b{bits} !"]
-    lines.append(f"#{end}")
+    lines += [f"#{end}", f"#{end + 1}"]  # the final timestamp closes the last timestep
     provider = VcdWaveformProvider.from_text("\n".join(lines) + "\n")
     assert provider.get_coverage() == TraceCoverage(start_ps=0, end_ps=end)
     for instant in range(end + 1):
@@ -630,8 +638,10 @@ def test_real_simulator_dumps_reproduce_the_fixture_failure(simulator: str, fixt
     path = FIXTURES / "waveform" / f"mock_fifo_{simulator}.vcd"
     provider = VcdWaveformProvider.from_path(path)
     assert provider.trace.skipped == ()
-    assert provider.get_coverage() == TraceCoverage(start_ps=0, end_ps=100000)
-    assert provider.get_clock_edges("tb.dut.clk", 0, 100001) == tuple(range(5000, 100000, 10000))
+    # $finish at 100 ns coincides with a clock fall, so that final timestep is
+    # not exposed (spec 9); the last compared edge at 95 ns is unaffected.
+    assert provider.get_coverage() == TraceCoverage(start_ps=0, end_ps=99999)
+    assert provider.get_clock_edges("tb.dut.clk", 0, 100000) == tuple(range(5000, 100000, 10000))
     for signal in fixture.trace.signals:
         path_ = signal.decl.path
         assert provider.get_signal_decl(path_).width == signal.decl.width
@@ -1199,7 +1209,7 @@ b1010 !
 #5
 b0x01 !
 1#
-#9
+#10
 """
     full = VcdWaveformProvider.from_text(text)
     kept = VcdWaveformProvider(parse_vcd(text, keep=["top.u.port"]))
@@ -1229,7 +1239,7 @@ def test_keep_still_validates_unselected_value_changes() -> None:
             parse_vcd(bad, keep=keep)
     # A record for an unselected code before the first timestamp still sets coverage.
     early = HEADER + 'b1 "\n#3\n1!\n#7\n'
-    assert parse_vcd(early, keep=keep).coverage == parse_vcd(early).coverage == TraceCoverage(start_ps=0, end_ps=7000)
+    assert parse_vcd(early, keep=keep).coverage == parse_vcd(early).coverage == TraceCoverage(start_ps=0, end_ps=6999)
 
 
 def test_keep_leaves_dump_gaps_unchanged_and_restate_checks_kept_signals_only() -> None:
@@ -1251,7 +1261,7 @@ def test_keep_leaves_dump_gaps_unchanged_and_restate_checks_kept_signals_only() 
 
 
 def test_keep_preserves_same_timestamp_clock_ambiguity() -> None:
-    text = HEADER + '#0\n0!\nb0 "\n#5\n1!\n0!\n1!\nb1 "\nb10 "\n#10\n0!\n#15\n'
+    text = HEADER + '#0\n0!\nb0 "\n#5\n1!\n0!\n1!\nb1 "\nb10 "\n#10\n0!\n#15\n#16\n'
     kept = VcdWaveformProvider(parse_vcd(text, keep=["top.clk"]))
     with pytest.raises(IndeterminateClockError):
         kept.get_clock_edges("top.clk", 0, 15001)
@@ -1287,6 +1297,7 @@ def test_keep_never_changes_a_kept_signal_under_property_tests(
     ]
     for time, code, bits in sorted(records, key=lambda item: item[0]):
         lines += [f"#{time}", f"b{bits} {code}"]
+    lines.append(f"#{max(time for time, _, _ in records) + 1}")  # closes the last timestep
     text = "\n".join(lines) + "\n"
     full = VcdWaveformProvider.from_text(text)
     paths = [path for path in full.trace.signal_paths if path in kept_paths]
@@ -1326,6 +1337,7 @@ def clocked(extra: dict[int, str], *, last: int = 60) -> dict[int, str]:
     events[10] += " 1r"
     for time_ns, records in extra.items():
         events[time_ns] = f"{events.get(time_ns, '')} {records}".strip()
+    events.setdefault(last + 1, "")  # closes the last timestep (spec 9)
     return events
 
 
@@ -1435,7 +1447,6 @@ def test_timestamps_beyond_max_time_ps_are_unsupported_not_a_crash(tmp_path: Pat
     fs_header = HEADER.replace("1 ns", "1 fs")
     for text in [
         HEADER + f"#0\n0!\n#{'9' * 5000}\n",  # never reaches int()
-        ps_header + f"#0\n0!\n#{MAX_TIME_PS}\n",  # coverage end must stay below the bound
         ps_header + f"#0\n0!\n#{MAX_TIME_PS + 1}\n",
         HEADER + f"#0\n0!\n#{MAX_TIME_PS // 1000 + 1}\n",  # in bound as ticks, not as ps
     ]:
@@ -1445,10 +1456,13 @@ def test_timestamps_beyond_max_time_ps_are_unsupported_not_a_crash(tmp_path: Pat
     vcd.write_text(HEADER + f"#0\n0!\n#{'9' * 5000}\n", encoding="utf-8")
     result = compare_files(vcd, FIXTURES / "mock_fifo_golden.jsonl")
     assert (result.status, codes_of(result)) == (AnalysisStatus.UNSUPPORTED, ["TRACE_UNSUPPORTED"])
-    # The largest legal values stay exact, including femtosecond ticks above 39 digits.
-    top = VcdWaveformProvider.from_text(ps_header + f"#0\n0!\n#{MAX_TIME_PS - 1}\n1!\n")
+    # The largest legal final timestamp is MAX_TIME_PS itself; coverage ends 1 ps
+    # before it (spec 9), so it stays below the bound. Femtosecond ticks above
+    # 39 digits stay exact.
+    top = VcdWaveformProvider.from_text(ps_header + f"#0\n0!\n#{MAX_TIME_PS - 1}\n1!\n#{MAX_TIME_PS}\n")
     assert top.get_coverage().end_ps == MAX_TIME_PS - 1
-    fs_top = VcdWaveformProvider.from_text(fs_header + f"#0\n0!\n#{(MAX_TIME_PS - 1) * 1000}\n1!\n")
+    assert top.get_value_at("top.clk", MAX_TIME_PS - 1) == lv("1")
+    fs_top = VcdWaveformProvider.from_text(fs_header + f"#0\n0!\n#{MAX_TIME_PS * 1000}\n")
     assert fs_top.get_coverage().end_ps == MAX_TIME_PS - 1
 
 
@@ -1494,3 +1508,76 @@ def test_handshake_pass_needs_a_known_clock_until_the_end() -> None:
     glitched = VcdWaveformProvider.from_text(text + "#72\nxc0\n#74\n0c0\n#80\n")
     result = compare(glitched, golden(HANDSHAKE_HEADER, transactions(1)))
     assert (result.status, codes_of(result)) == (AnalysisStatus.INCONCLUSIVE, ["CLOCK_UNKNOWN_TRANSITION"])
+
+
+# --------------------------------------------------------------------------
+# End of trace (spec 9, decision 11)
+# --------------------------------------------------------------------------
+
+
+def test_final_timestamp_closes_coverage_and_its_records_are_not_exposed() -> None:
+    text = HEADER + '#0\n0!\nb1 "\n#10\n1!\nb10 "\n#20\n0!\nb11 "\n'
+    provider = VcdWaveformProvider.from_text(text)
+    assert provider.get_coverage() == TraceCoverage(start_ps=0, end_ps=19999)
+    # The records at 20 ns may be an incomplete timestep: they are never exposed.
+    assert provider.get_value_at("top.data", 19999) == lv("00000010")
+    with pytest.raises(OutOfRangeError):
+        provider.get_value_at("top.data", 20000)
+    assert [s.time_ps for s in provider.get_window_slice(["top.clk"], 0, 20000).signals[0].samples] == [10000]
+    # A bare closing timestamp (as simulators write at $finish) loses nothing.
+    closed = VcdWaveformProvider.from_text(text + "#21\n")
+    assert closed.get_coverage().end_ps == 20999
+    assert closed.get_value_at("top.data", 20000) == lv("00000011")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        HEADER + '#0\n0!\nb1 "\n#10',  # no final newline: may be cut mid-line
+        HEADER + '#0\n0!\nb1 "\n#10\n1!',
+        HEADER + '#0\n0!\nb1 "\n',  # one timestamp: nothing is known complete
+        HEADER + '0!\nb1 "\n#0\n1!\n',  # implicit #0 then #0: still one timestamp
+        "",
+    ],
+)
+def test_truncated_or_single_timestep_traces_are_invalid(text: str) -> None:
+    with pytest.raises(InvalidTraceError):
+        parse_vcd(text)
+
+
+def _assert_prefix_agrees(full_text: str) -> int:
+    """Every byte-prefix is invalid or agrees with the full trace where it is covered."""
+    full = VcdWaveformProvider.from_text(full_text)
+    paths = list(full.trace.signal_paths)
+    instants = {0}
+    for series in full.trace._series_by_path.values():
+        for time in series.times:
+            instants.update((time - 1, time, time + 1))
+    accepted = 0
+    for cut in range(len(full_text) + 1):
+        try:
+            prefix = VcdWaveformProvider.from_text(full_text[:cut])
+        except InvalidTraceError:
+            continue
+        accepted += 1
+        coverage = prefix.get_coverage()
+        assert coverage.start_ps == full.get_coverage().start_ps
+        assert coverage.end_ps <= full.get_coverage().end_ps
+        for path in paths:
+            for instant in sorted(i for i in instants if coverage.start_ps <= i <= coverage.end_ps):
+                try:
+                    expected = full.get_value_at(path, instant)
+                except DataUnavailableError:
+                    with pytest.raises(DataUnavailableError):
+                        prefix.get_value_at(path, instant)
+                    continue
+                assert prefix.get_value_at(path, instant) == expected, (cut, path, instant)
+    return accepted
+
+
+def test_every_byte_prefix_is_rejected_or_agrees_with_the_full_trace(fixture: MockFixture) -> None:
+    # Spec 14.2: truncation can shorten coverage but never change a value.
+    assert _assert_prefix_agrees(vcd_from_mock(fixture.trace)) > 10
+    assert _assert_prefix_agrees(GAP_TEXT) > 3
+    real = (FIXTURES / "waveform" / "mock_fifo_verilator.vcd").read_text(encoding="utf-8")
+    assert _assert_prefix_agrees(real) > 10
