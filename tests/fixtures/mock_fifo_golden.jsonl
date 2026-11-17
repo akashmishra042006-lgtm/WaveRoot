@@ -1,0 +1,9 @@
+{"type":"metadata","schema_version":1,"mode":"cycle","clock":"tb.dut.clk","reset":"tb.dut.rst_n","reset_active":"0","sampling":"settled","signals":[{"name":"full","path":"tb.dut.full","width":1},{"name":"empty","path":"tb.dut.empty","width":1},{"name":"out_valid","path":"tb.dut.out_valid","width":1},{"name":"out_data","path":"tb.dut.out_data","width":8}]}
+{"type":"expected","epoch":0,"cycle_index":0,"values":{"full":"0","empty":"0","out_valid":"1","out_data":"00010001"}}
+{"type":"expected","epoch":0,"cycle_index":1,"values":{"full":"0","empty":"0","out_valid":"1","out_data":"00010001"}}
+{"type":"expected","epoch":0,"cycle_index":2,"values":{"full":"0","empty":"0","out_valid":"1","out_data":"00010001"}}
+{"type":"expected","epoch":0,"cycle_index":3,"values":{"full":"1","empty":"0","out_valid":"1","out_data":"00010001"}}
+{"type":"expected","epoch":0,"cycle_index":4,"values":{"full":"1","empty":"0","out_valid":"1","out_data":"00100010"}}
+{"type":"expected","epoch":0,"cycle_index":5,"values":{"full":"0","empty":"0","out_valid":"1","out_data":"00110011"}}
+{"type":"expected","epoch":0,"cycle_index":6,"values":{"full":"0","empty":"0","out_valid":"1","out_data":"01000100"}}
+{"type":"expected","epoch":0,"cycle_index":7,"values":{"full":"0","empty":"0","out_valid":"1","out_data":"01010101"}}
