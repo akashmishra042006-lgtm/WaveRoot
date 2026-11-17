@@ -35,13 +35,20 @@ def test_invalid_report_fixtures_are_rejected(name: str) -> None:
 
 
 def test_real_run_records_exist() -> None:
-    assert {"real_fifo_pass.json", "real_fifo_fail.json", "real_alu_x.json"} <= set(RUN_RECORDS)
+    assert {
+        "real_fifo_pass.json", "real_fifo_fail.json", "real_alu_x.json", "real_fifo_fail_selfcheck.json"
+    } <= set(RUN_RECORDS)
 
 
 @pytest.mark.parametrize("name", RUN_RECORDS)
 def test_real_run_records_validate(name: str) -> None:
     data = load_report(FIXTURES / name)
-    assert data["comparison_adapter"] == {"name": "track_c_selfcheck", "kind": "benchmark_self_check"}
+    expected = (
+        {"name": "track_c_selfcheck", "kind": "benchmark_self_check"}
+        if name == "real_fifo_fail_selfcheck.json"
+        else {"name": "track_a_waveform", "kind": "analysis"}
+    )
+    assert data["comparison_adapter"] == expected
     assert "/home/" not in (FIXTURES / name).read_text()
 
 

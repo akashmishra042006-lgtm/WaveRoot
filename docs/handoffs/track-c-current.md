@@ -113,21 +113,25 @@ Not done: the offline-API state (C06 has no API yet); causal graphs and
 waveform windows from real engines (Tracks A/B). Fixture-only UI is not full
 integration.
 
-## C04 — partly unblocked
+## C04 part 1 — done (Track A comparison is the default)
 
-Track A is on `main` and already agrees with the self-check on every real
-benchmark trace. Next: a `ComparisonAdapter` over `src.waveform.compare`
-(kind `analysis`) as the CLI default, and Track A's waveform options wired
-into `cli.py`. The causal half still waits for Track B (#6). The self-check
-stays labeled `benchmark_self_check` and is not Track A coverage.
+`WaveformComparison` (`src/app/adapters.py`, kind `analysis`) wraps Track A's
+`run_comparison` without touching Track A. `analyze` defaults to
+`--comparison track-a` and takes Track A's `--keep`, `--cache-dir`, and
+`--fst-timeout`; `--comparison self-check` keeps the labeled
+`benchmark_self_check` path. `compare --trace T --golden G` runs Track A's
+engine on a saved trace using `add_waveform_arguments` unchanged. Tests:
+`tests/track_c/test_c04_waveform.py`. UI fixtures were regenerated; the UI keeps
+one real self-check record (`real_fifo_fail_selfcheck.json`) to test the note
+that only that adapter shows. Still open: C04 part 2 (Track B causal adapter)
+waits for Track B (#6, #15).
 
 ## Open questions
 
 - Dev 1: spec §8.1 forbids epochs without golden records, so handshake
   schedules need ≥1 transfer per epoch (`build_goldens` enforces this).
 - A console-script entry point would touch shared `pyproject.toml`; deferred to
-  a focused PR. Track A's waveform options get wired into `cli.py` when Track A
-  re-lands.
+  a focused PR.
 - `benchmarks/common/benchlib.run_simulation` still has its own simple runner
   for the benchmark tests; it could delegate to `src.app.runner.Runner`.
 
@@ -142,6 +146,5 @@ every gate against the whole stack.
 
 ## Next single ticket
 
-C04 part 1: the Track A comparison adapter (see above). Independent cold
-review of C03+C05 (Prompt 5) in a fresh session. Then C04 part 2 when Track B
-merges, and C06 (local API).
+Independent cold review of C03+C05+C04 part 1 (Prompt 5) in a fresh session.
+Then C04 part 2 when Track B merges, and C06 (local API).

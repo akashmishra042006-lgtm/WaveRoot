@@ -124,6 +124,9 @@ def make_real() -> None:
         ("real_fifo_pass.json", "case_01_fifo_wrap", "correct", []),
         ("real_fifo_fail.json", "case_01_fifo_wrap", "mutant", []),
         ("real_alu_x.json", "case_04_alu_xprop", "mutant", []),
+        # The same failure checked by the labeled benchmark self-check, so the UI
+        # keeps a real record whose comparison is not waveform analysis.
+        ("real_fifo_fail_selfcheck.json", "case_01_fifo_wrap", "mutant", ["--comparison", "self-check"]),
         # A genuine infrastructure error: the wall-clock limit expires mid-build.
         ("real_fifo_timeout.json", "case_01_fifo_wrap", "mutant", ["--timeout", "0.05"]),
     ]

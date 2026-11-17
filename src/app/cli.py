@@ -1,14 +1,17 @@
 """WaveRoot Track C command line.
 
     python -m src.app.cli analyze MANIFEST --variant mutant --schedule directed
+    python -m src.app.cli compare --trace TRACE --golden GOLDEN
     python -m src.app.cli open REPORT_JSON
 
 Exit codes follow spec.md section 8.4: 0 pass, 1 fail, 2 invalid_input or
 error, 3 unsupported or inconclusive. Ctrl-C cancels a running job and reaps
 the simulator's process group.
 
-Waveform options from Track A are wired here once Track A's provider is on
-``main``; until then comparison uses the labeled benchmark self-check.
+``analyze`` compares with Track A's waveform engine by default
+(``--comparison track-a``); ``--comparison self-check`` uses the labeled
+benchmark self-check over testbench samples. ``compare`` runs Track A's engine
+on a saved trace and golden using Track A's own options.
 """
 
 from __future__ import annotations
@@ -22,10 +25,18 @@ from collections.abc import Sequence
 from pathlib import Path
 from types import FrameType
 
-from src.app.adapters import FixtureCausal, SelfCheckComparison
+from src.app.adapters import ComparisonAdapter, FixtureCausal, SelfCheckComparison, WaveformComparison
 from src.app.runner import Limits, Runner
 from src.app.service import EXIT_CODES, AnalysisOutcome, AnalysisService, load_report
 from src.contracts import AnalysisStatus
+from src.waveform.options import (
+    DEFAULT_FST_TIMEOUT_S,
+    WaveformOptions,
+    add_waveform_arguments,
+    exit_code,
+    options_from_namespace,
+    run_comparison,
+)
 
 DEFAULT_ARTIFACTS = Path("artifacts/runs")
 
@@ -45,12 +56,36 @@ def _parser() -> argparse.ArgumentParser:
     analyze.add_argument("--fixture-causal", type=Path, metavar="MOCK_FIXTURE_JSON",
                          help="explicit fixture mode: attach a hand-authored causal report "
                               "(labeled synthetic; refused unless it matches the failure)")
+    analyze.add_argument("--comparison", choices=("track-a", "self-check"), default="track-a",
+                         help="track-a: Track A's waveform engine (default); self-check: Track C's "
+                              "benchmark checker over testbench samples")
+    # Track A's option names, types and help. add_waveform_arguments is not used
+    # here because it requires --trace/--golden, which analyze produces itself.
+    analyze.add_argument("--keep", action="append", default=None, metavar="PATTERN",
+                         help="index only signals whose hierarchical path matches PATTERN "
+                              "(* within a component, ** across components, ? one character); repeatable")
+    analyze.add_argument("--cache-dir", type=Path, default=None, metavar="PATH",
+                         help="reuse parsed traces cached in PATH; off by default")
+    analyze.add_argument("--fst-timeout", dest="fst_timeout_s", type=_seconds, default=DEFAULT_FST_TIMEOUT_S,
+                         metavar="SECONDS",
+                         help=f"time limit for converting an FST trace with fst2vcd (default {DEFAULT_FST_TIMEOUT_S:g})")
     analyze.add_argument("--json", action="store_true", help="print the run record as JSON")
+
+    compare = sub.add_parser("compare", help="compare a saved trace with a golden using Track A's engine")
+    add_waveform_arguments(compare)
 
     open_ = sub.add_parser("open", help="validate and summarize a saved run record")
     open_.add_argument("report", type=Path)
     open_.add_argument("--json", action="store_true")
     return parser
+
+
+def _seconds(text: str) -> float:
+    # Reuse Track A's validation by building its options; keeps one definition.
+    try:
+        return WaveformOptions(trace=Path("-"), golden=Path("-"), fst_timeout_s=float(text)).fst_timeout_s
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a positive, finite number of seconds") from None
 
 
 def _summary(outcome: AnalysisOutcome) -> str:
@@ -99,10 +134,22 @@ def main(argv: Sequence[str] | None = None) -> int:
                     print(f"  {diag.get('code')}: {diag.get('message')}")
         return EXIT_CODES[status]
 
+    if args.command == "compare":
+        result = run_comparison(options_from_namespace(args))
+        print(result.model_dump_json(indent=2))
+        return exit_code(result)
+
+    comparison: ComparisonAdapter
+    if args.comparison == "track-a":
+        comparison = WaveformComparison(
+            keep=tuple(args.keep or ()), cache_dir=args.cache_dir, fst_timeout_s=args.fst_timeout_s
+        )
+    else:
+        comparison = SelfCheckComparison()
     causal = FixtureCausal(args.fixture_causal) if args.fixture_causal else None
     service = AnalysisService(
         Runner(args.artifacts, Limits(wall_clock_s=args.timeout)),
-        SelfCheckComparison(),
+        comparison,
         causal,
         fixture_mode=causal is not None,
     )

@@ -5,7 +5,7 @@ The service depends only on these protocols and on the types in
 plug in here once they exist on ``main``; until then the available adapters
 are labeled by ``kind`` so nothing synthetic can pass for analysis:
 
-* ``analysis`` — a real engine (none on ``main`` yet).
+* ``analysis`` — a real engine: Track A's waveform comparison.
 * ``benchmark_self_check`` — Track C's independent benchmark checker over
   testbench-sampled values (``src/app/selfcheck.py``). Real simulation data,
   but not Track A's waveform analysis.
@@ -30,6 +30,7 @@ from src.contracts import (
     GoldenTrace,
     load_mock_fixture,
 )
+from src.waveform.options import DEFAULT_FST_TIMEOUT_S, WaveformOptions, run_comparison
 
 AdapterKind = Literal["analysis", "benchmark_self_check", "synthetic_fixture"]
 
@@ -68,6 +69,45 @@ class SelfCheckComparison:
         if golden.header.mode is ComparisonMode.CYCLE:
             return selfcheck.check_cycle(golden, edges)
         return selfcheck.check_handshake(golden, edges)
+
+
+class WaveformComparison:
+    """Track A's waveform engine (``src.waveform``) comparing the run's trace
+    against the golden. The golden handed in is already rebased onto the
+    trace's hierarchy; it is written next to the trace so the comparison can be
+    reproduced with ``cli compare``. Input problems come back as ``error`` /
+    ``invalid_input`` results, never exceptions."""
+
+    name = "track_a_waveform"
+    kind: AdapterKind = "analysis"
+
+    def __init__(
+        self,
+        *,
+        keep: tuple[str, ...] = (),
+        cache_dir: Path | None = None,
+        fst_timeout_s: float = DEFAULT_FST_TIMEOUT_S,
+    ) -> None:
+        self.keep = keep
+        self.cache_dir = cache_dir
+        self.fst_timeout_s = fst_timeout_s
+
+    def compare(self, golden: GoldenTrace, run: RunRecord) -> ComparisonResult:
+        if run.trace is None:
+            raise AdapterError("the run produced no trace to compare")
+        if run.run_dir is None:
+            raise AdapterError("the run has no run directory to hold the golden")
+        golden_path = run.run_dir / f"golden_{golden.header.mode.value}.jsonl"
+        golden_path.write_text(golden.to_jsonl())
+        return run_comparison(
+            WaveformOptions(
+                trace=run.trace,
+                golden=golden_path,
+                keep=self.keep,
+                cache_dir=self.cache_dir,
+                fst_timeout_s=self.fst_timeout_s,
+            )
+        )
 
 
 class FixtureCausal:

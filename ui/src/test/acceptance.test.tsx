@@ -195,7 +195,18 @@ describe("scenario 3: unknown values are never shown as numbers", () => {
     render(<App />);
     await loadSample(user, /ALU unknown value/);
     expect(screen.getByTestId("unlocalized")).toHaveTextContent("CAUSAL_UNAVAILABLE");
+  });
+
+  it("labels the benchmark self-check, and only the self-check", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await loadSample(user, /benchmark self-check/);
     expect(screen.getByTestId("comparison-counts")).toHaveTextContent("benchmark self-check");
+
+    // A record compared by Track A's waveform engine (kind "analysis") carries no such note.
+    await loadSample(user, /ALU unknown value, real Icarus run/);
+    expect(screen.getByTestId("comparison-counts")).not.toHaveTextContent("self-check");
+    expect(screen.getByTestId("comparison-counts")).not.toHaveTextContent("not waveform analysis");
   });
 });
 
