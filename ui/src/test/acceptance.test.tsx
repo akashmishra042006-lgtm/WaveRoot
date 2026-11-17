@@ -31,6 +31,7 @@ async function loadSample(user: ReturnType<typeof userEvent.setup>, label: RegEx
 async function uploadJson(user: ReturnType<typeof userEvent.setup>, data: unknown, name = "report.json") {
   const file = new File([JSON.stringify(data)], name, { type: "application/json" });
   await user.upload(screen.getByTestId("file-input"), file);
+  await waitFor(() => expect(screen.queryByTestId("loading")).not.toBeInTheDocument());
 }
 
 // userEvent.setup() installs a clipboard stub; tests read it back with readText().
@@ -129,7 +130,12 @@ describe("scenario 1: suspect selection synchronizes every panel", () => {
     expect(screen.getByTestId("node-push.c3.before")).toHaveAttribute("aria-pressed", "true");
     // push is in the waveform window, so its row is the selected one.
     expect(screen.queryByTestId("signal-missing")).toBeNull();
-    expect(document.querySelector('svg.track[data-signal="tb.dut.push"]')).toHaveClass("selected");
+    expect(document.querySelector('canvas.track[data-signal="tb.dut.push"]')).toHaveClass("selected");
+    await user.click(screen.getByTestId("node-wptr.c3.before"));
+    expect(screen.getByTestId("value-wptr")).toHaveTextContent("011");
+    expect(screen.getByTestId("cursor-time")).toHaveTextContent("55000 ps");
+    await user.click(screen.getByTestId("node-wptr.c3.settled"));
+    expect(screen.getByTestId("value-wptr")).toHaveTextContent("000");
   });
 });
 
@@ -162,12 +168,13 @@ describe("scenario 2: the cursor never moves the failure", () => {
     const user = userEvent.setup();
     render(<App />);
     await loadSample(user, /Mock FIFO failure/);
-    const track = document.querySelector('svg.track[data-signal="tb.dut.clk"]');
+    const track = document.querySelector('canvas.track[data-signal="tb.dut.clk"]');
     expect(track).not.toBeNull();
     await act(async () => {
       track!.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: 50 }));
     });
     expect(screen.getByTestId("cursor-time")).not.toHaveTextContent("55000 ps");
+    expect(screen.getByTestId("cursor-time").parentElement).not.toHaveTextContent("Cursor (settled)");
     expect(screen.getByTestId("failure-marker-time")).toHaveTextContent("55000 ps");
   });
 });
@@ -188,6 +195,10 @@ describe("scenario 3: unknown values are never shown as numbers", () => {
 
     await user.selectOptions(screen.getByTestId("radix"), "hex");
     expect(screen.getByTestId("failure-actual")).toHaveTextContent("= xx");
+    expect(screen.getByTestId("failure-actual")).not.toHaveTextContent("0x");
+    await user.selectOptions(screen.getByTestId("radix"), "bin");
+    expect(screen.getByTestId("failure-actual")).not.toHaveTextContent("=");
+    expect(screen.getByTestId("failure-expected")).not.toHaveTextContent("=");
   });
 
   it("explains that this real failure is not localized", async () => {
@@ -388,7 +399,7 @@ describe("pruned branches and graph limits", () => {
     expect(document.querySelector('[data-edge="e04"]')).toBeNull();
     await user.click(screen.getByLabelText(/Show pruned branches \(1\)/));
     expect(document.querySelector('[data-edge="e04"]')).not.toBeNull();
-    expect(document.querySelector('[data-edge="e04"] title')?.textContent).toContain("pruned");
+    expect(document.querySelector('[data-edge="e04"]')?.getAttribute('title')).toContain("pruned");
   });
 
   it("does not draw an oversized graph but keeps the list", async () => {

@@ -1,3 +1,32 @@
+# PR #18 — dashboard review fixes (November 17, 2026)
+
+React 19, Tailwind, React Flow and Canvas presentation on feat/track-c-ui.
+Locked contracts unchanged. Latest main, including C04 part 1 (#17), is merged.
+
+Review fixes: Chrome is again the CI default; local Chromium is an explicit
+browser override. Unknown hex has no numeric prefix and the failure strip
+respects radix. Cursor text omits absent phase. Named valueBefore documents
+strict-before integer-ps lookup, including missing prior history. Blank source
+lines retain height. Gap-free waveform segments avoid per-segment cloning.
+
+Validation of this revision:
+- UI: 61 tests, strict TypeScript check and production build passed.
+- Chromium 159.0.8154.6: widths 1440/1024/768/375, no overflow, visible control
+  overlaps or page errors. Checks require Canvas pixels, React Flow paths,
+  preserved blank-line heights, and synchronized node clicks. Screenshots inspected.
+- 100 signals x 1,000 transitions, 1,000 nodes on Intel Xeon Platinum 8573C:
+  selection median 16.7 ms, max 27.8 ms; cursor median 16.3 ms, max 19.5 ms.
+  Local measurements are not a guarantee on shared CI runners.
+- Locked sync and mypy passed (17 files); Python unit gate: 436 passed,
+  74 integration cases deselected.
+- Local simulator gate remains blocked by absent Verilator/Icarus/FST tools.
+  CI must verify these; simulator tests were not skipped or weakened here.
+
+Next for this PR: reviewer re-review and CI verification. Earlier handoff below
+records previous milestones, not validation claims for this UI revision.
+
+---
+
 # Track C handoff — current state
 
 Date: November 16, 2026. Latest work: ticket C05 (interface), done in the

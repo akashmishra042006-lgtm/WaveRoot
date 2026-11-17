@@ -17,7 +17,7 @@ import { sameObservation } from "../model/validate";
 import type { CausalNode, Loaded, Observation, SourceSpan } from "../model/types";
 import type { Radix } from "../model/values";
 import { formatObservation, formatTime, shortName } from "../model/values";
-import { ensureVisible, type TimeWindow, zoomWindow } from "../model/waveform";
+import { ensureVisible, tenCycleWindow, type TimeWindow, zoomWindow } from "../model/waveform";
 
 export interface Selection {
   selectedSuspectId: string | null;
@@ -92,7 +92,7 @@ export function initialSelection(doc: Loaded | null): Selection {
     selectedObservation: null,
     sourceLocation: null,
     cursorTime: null,
-    window: doc ? bounds(doc) : null,
+    window: doc?.report?.waveform && doc.failure ? tenCycleWindow(doc.report.waveform, doc.failure.clock_path, doc.failure.observation.time_ps) : doc ? bounds(doc) : null,
     radix: "bin",
     showPruned: false,
     announcement: "",

@@ -54,3 +54,29 @@ be rejected by `src/contracts.py` as well (`tests/track_c/test_ui_fixtures.py`).
 - Causal graphs come only from fixtures until Track B lands; waveform windows
   arrive with Track A's provider. Real run records today show the observed
   failure as unlocalized, with the reason.
+
+### Dark dashboard (React 19)
+
+The workbench uses Tailwind CSS, React Flow for pan/zoom causal graphs, and
+high-DPI Canvas waveform tracks with a separate selection/failure cursor overlay.
+Clicking graph nodes, ranked suspects, or waveform tracks shares one selection;
+source text is SHA-256 checked and syntax highlighted. Binary bits remain visible
+beside the selected numeric radix; the failure hero shows hex alongside binary
+by default. Assertions copy their validation status with the SystemVerilog text.
+
+Schema 1 is unchanged. Confidence is explicitly “not supplied” because suspect
+ranks are ordinal, not probabilities. The fixture has no assertions. Sequential
+edges mean `before → settled` at one clock edge and are dashed amber; a genuine
+previous-cycle carry is labeled `−1 cycle`, in solid cyan. Unknown-control paths
+are labeled and purple; pruned paths are dimmed when revealed.
+
+“10 cycles” derives ten complete intervals from eleven recorded rising edges.
+A short trace, missing clock, dump gap, or cursor outside those complete intervals
+falls back to the available window instead of inventing time or hiding selection.
+Absolute timestamps remain BigInt; before-phase readouts use strictly earlier
+samples while the cursor stays on the exact observation timestamp.
+
+For browser checks: `python3 -m playwright install chromium`, build, then
+`python3 ui/scripts/visual_check.py work/visual`. Set `WAVEROOT_BROWSER_CHANNEL=chrome`
+to use an installed Chrome instead. The script checks responsive layouts and real
+graph-to-waveform/source selection, and records large-report interaction timings.
