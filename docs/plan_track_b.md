@@ -19,15 +19,18 @@ is background. Where they differ, the spec wins.
 | `src/causal/sva_synth.py` | `synthesize_assertion`: candidate checker module plus `bind` for the top suspect. |
 | `tests/test_causal.py` | 73 engine tests against `MockWaveformProvider`. |
 
-Supported today: one flat module; `assign`; net declaration assignments;
-`always_comb`; `always @*`; `always_ff` and `always @(posedge clk)` with one
-clock; `if`; `case`, `casez`, `casex`; `?:`; packed vectors; constant and
-indexed part-selects; packed struct field reads; parameters and enum values;
-concatenated assignment targets.
+Supported today: module instances with input and output ports (B-01; signals
+are named by path from the top instance, such as `u_core.q`, and clocks are
+resolved through plain port connections); `assign`; net declaration
+assignments; `always_comb`; `always @*`; `always_ff` and
+`always @(posedge clk)` with one clock; `if`; `case`, `casez`, `casex`; `?:`;
+packed vectors; constant and indexed part-selects; packed struct field reads;
+parameters and enum values; concatenated assignment targets.
 
 Reported but not traversed (the slice stops there and sets `truncated`):
-module instances, generate blocks, asynchronous reset or several edge events,
-`always_latch`, blocking assignments inside a clocked process, undriven
+`inout`, `ref`, and interface ports; unconnected input ports; instance arrays
+and generate blocks; asynchronous reset or several edge events;
+`always_latch`; blocking assignments inside a clocked process; undriven
 internal signals.
 
 Kept as unknown dependencies (every operand is retained, nothing is

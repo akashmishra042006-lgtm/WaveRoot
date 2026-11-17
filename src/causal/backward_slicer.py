@@ -536,12 +536,21 @@ class _Slicer:
                 )
 
     def _clock_matches(self, driver: Driver) -> bool:
+        """True when ``driver`` is clocked by the rising edge of the failure's clock.
+
+        A clock port of a child instance matches when it is connected to the
+        failure's clock by plain whole-signal port connections. A clock that
+        passes through logic is a different signal and does not match.
+        """
         clock = driver.clock
-        return (
-            clock is not None
-            and clock.rising
-            and self._trace_path(clock.signal) == self._failure.clock_path
-        )
+        if clock is None or not clock.rising:
+            return False
+        if self._trace_path(clock.signal) == self._failure.clock_path:
+            return True
+        failure_clock = self._local(self._failure.clock_path)
+        if failure_clock is None:
+            return False
+        return self._design.canonical(clock.signal) == self._design.canonical(failure_clock)
 
     def _verdicts(
         self, driver: Driver, outcomes: list[list[Tri]], when: str

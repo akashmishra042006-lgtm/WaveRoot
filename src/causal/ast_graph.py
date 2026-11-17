@@ -1,7 +1,7 @@
-"""Structural driver-to-load graph of one elaborated SystemVerilog module.
+"""Structural driver-to-load graph of one elaborated SystemVerilog design.
 
 ``build_design_graph`` elaborates SystemVerilog with ``pyslang`` and lowers one
-top instance into a ``DesignGraph``:
+top instance, and every module instance below it, into a ``DesignGraph``:
 
 * every declared signal, with its width, declared range, and source line;
 * for every driven signal, its ``Driver`` records: the guarded assignments of
@@ -11,16 +11,25 @@ top instance into a ``DesignGraph``:
   labeled ``combinational`` or ``sequential``, ``data`` or ``control``, with the
   guards under which the dependence is active and its source span.
 
-The graph is static. It names signals relative to the analyzed instance (for
-example ``wptr``) and knows nothing about time; ``backward_slicer`` unrolls it
-over real clock edges and prunes it with waveform values.
+The graph is static. It names signals by their path relative to the analyzed
+top instance (``wptr``, ``u_core.q``, ``u_core.u_fifo.wptr``) and knows nothing
+about time; ``backward_slicer`` unrolls it over real clock edges and prunes it
+with waveform values.
 
-Scope of this version: one flat module, ``assign``, ``always_comb``,
-``always_ff`` / ``always @(posedge clk)``, ``if``, ``case`` / ``casez`` /
-``casex``, ``?:``, packed vectors, part-selects, and packed struct fields.
-Constructs outside that scope are never dropped: they are recorded as
-diagnostics and as drivers or operands marked unsupported, so the slicer can
-report where its result is incomplete.
+Module instances are lowered by recursion over each elaborated instance body,
+so two instances that differ by parameter are lowered separately. Each port
+connection becomes a combinational ``Driver``: an input port drives the child's
+internal signal from the connection expression, and an output port drives the
+parent's signals from the child's internal signal. An input port connected to
+a plain whole-signal reference also records an alias, which lets a clock be
+recognized through the hierarchy.
+
+Scope of this version: ``assign``, ``always_comb``, ``always_ff`` /
+``always @(posedge clk)``, ``if``, ``case`` / ``casez`` / ``casex``, ``?:``,
+packed vectors, part-selects, packed struct fields, and module instances with
+input and output ports. Constructs outside that scope are never dropped: they
+are recorded as diagnostics and as drivers or operands marked unsupported, so
+the slicer can report where its result is incomplete.
 """
 
 from __future__ import annotations
@@ -28,7 +37,7 @@ from __future__ import annotations
 import hashlib
 import os
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from types import MappingProxyType
@@ -59,12 +68,18 @@ class ProcessKind(StrEnum):
     ALWAYS_FF = "always_ff"
     ALWAYS = "always"
     ALWAYS_LATCH = "always_latch"
+    PORT = "port"
     INSTANCE = "instance"
 
 
 @dataclass(frozen=True, slots=True)
 class SignalInfo:
-    """A declared signal. ``name`` is relative to the analyzed top instance."""
+    """A declared signal. ``name`` is its path relative to the analyzed top instance.
+
+    Only ports of the top instance have kind ``input``, ``output``, or
+    ``inout``. Ports of nested instances are ``internal`` signals driven by
+    their port connections.
+    """
 
     name: str
     width: int
@@ -130,14 +145,37 @@ class StructuralEdge:
     span: SourceSpan | None
 
 
+def _no_aliases() -> Mapping[str, str]:
+    return MappingProxyType({})
+
+
 @dataclass(frozen=True, slots=True)
 class DesignGraph:
+    """The lowered design.
+
+    ``aliases`` maps a child's input port signal to the parent signal it is
+    connected to, when the connection is a plain whole-signal reference. It is
+    used to resolve clocks through the hierarchy; dependencies still follow the
+    port ``Driver``.
+    """
+
     top_module: str
     sources: tuple[SourceFile, ...]
     signals: Mapping[str, SignalInfo]
     drivers: Mapping[str, tuple[Driver, ...]]
     edges: tuple[StructuralEdge, ...]
     diagnostics: tuple[Diagnostic, ...]
+    aliases: Mapping[str, str] = field(default_factory=_no_aliases)
+
+    def canonical(self, signal: str) -> str:
+        """The signal ``signal`` is an alias of, following aliases to the top."""
+        seen = {signal}
+        while signal in self.aliases:
+            signal = self.aliases[signal]
+            if signal in seen:
+                break
+            seen.add(signal)
+        return signal
 
     def fanin(self, signal: str) -> tuple[StructuralEdge, ...]:
         """Edges whose dependent signal is ``signal``."""
@@ -338,25 +376,52 @@ class _Lowerer:
         self._prefix = f"{instance.hierarchicalPath}."
         self._signals: dict[str, SignalInfo] = {}
         self._drivers: dict[str, list[Driver]] = {}
+        self._aliases: dict[str, str] = {}
         self._diagnostics: dict[Diagnostic, None] = {}
         self._texts: dict[str, str] = {}
         self._decisions = 0
         self._lvalue: ir.Expr | None = None
+        # Value of the child port while an output port connection is lowered.
+        self._port_value: ir.Expr | None = None
+        # Name prefix of the instance being lowered: "" for the top, "u_core." below it.
+        self._scope = ""
 
     # ---- top level ------------------------------------------------------
 
     def build(self, sources: tuple[SourceFile, ...]) -> DesignGraph:
-        members = list(self._instance.body)
+        # Declare the whole hierarchy first, so a reference resolves wherever it appears.
+        self._declare_scope(self._instance, "")
+        self._lower_scope(self._instance, "")
+        drivers = {name: tuple(found) for name, found in self._drivers.items()}
+        return DesignGraph(
+            top_module=self._instance.definition.name,
+            sources=sources,
+            signals=MappingProxyType(dict(self._signals)),
+            drivers=MappingProxyType(drivers),
+            edges=_structural_edges(drivers),
+            diagnostics=tuple(self._diagnostics),
+            aliases=MappingProxyType(dict(self._aliases)),
+        )
+
+    def _declare_scope(self, instance: ast.InstanceSymbol, scope: str) -> None:
+        members = list(instance.body)
         directions: dict[str, SignalKind] = {}
-        for member in members:
-            if isinstance(member, ast.PortSymbol) and member.internalSymbol is not None:
-                directions[member.internalSymbol.name] = _DIRECTIONS.get(
-                    member.direction, SignalKind.INOUT
-                )
+        if not scope:
+            for member in members:
+                if isinstance(member, ast.PortSymbol) and member.internalSymbol is not None:
+                    directions[member.internalSymbol.name] = _DIRECTIONS.get(
+                        member.direction, SignalKind.INOUT
+                    )
         for member in members:
             if isinstance(member, (ast.VariableSymbol, ast.NetSymbol)):
-                self._declare(member, directions.get(member.name, SignalKind.INTERNAL))
-        for member in members:
+                kind = directions.get(member.name, SignalKind.INTERNAL)
+                self._declare(member, f"{scope}{member.name}", kind)
+            elif isinstance(member, ast.InstanceSymbol):
+                self._declare_scope(member, f"{scope}{member.name}.")
+
+    def _lower_scope(self, instance: ast.InstanceSymbol, scope: str) -> None:
+        outer, self._scope = self._scope, scope
+        for member in instance.body:
             if isinstance(member, ast.ContinuousAssignSymbol):
                 self._lower_continuous(member)
             elif isinstance(member, ast.ProceduralBlockSymbol):
@@ -364,7 +429,9 @@ class _Lowerer:
             elif isinstance(member, ast.NetSymbol):
                 self._lower_net_initializer(member)
             elif isinstance(member, ast.InstanceSymbol):
-                self._lower_instance(member)
+                child = f"{scope}{member.name}."
+                self._lower_scope(member, child)
+                self._lower_instance(member, child)
             elif member.kind in (
                 ast.SymbolKind.GenerateBlock,
                 ast.SymbolKind.GenerateBlockArray,
@@ -378,17 +445,11 @@ class _Lowerer:
                     f"{self._where(member.location)} is not traversed; signals it drives "
                     "appear undriven.",
                 )
-        drivers = {name: tuple(found) for name, found in self._drivers.items()}
-        return DesignGraph(
-            top_module=self._instance.definition.name,
-            sources=sources,
-            signals=MappingProxyType(dict(self._signals)),
-            drivers=MappingProxyType(drivers),
-            edges=_structural_edges(drivers),
-            diagnostics=tuple(self._diagnostics),
-        )
+        self._scope = outer
 
-    def _declare(self, symbol: ast.VariableSymbol | ast.NetSymbol, kind: SignalKind) -> None:
+    def _declare(
+        self, symbol: ast.VariableSymbol | ast.NetSymbol, name: str, kind: SignalKind
+    ) -> None:
         canonical = symbol.type.canonicalType
         span = self._line_span(symbol.location)
         if canonical.isIntegral and canonical.bitWidth >= 1:
@@ -403,18 +464,18 @@ class _Lowerer:
                     bit_range = BitRange(left=declared.left, right=declared.right)
                 else:
                     bit_range = BitRange(left=width - 1, right=0)
-            info = SignalInfo(symbol.name, width, bit_range, canonical.isSigned, kind, span)
+            info = SignalInfo(name, width, bit_range, canonical.isSigned, kind, span)
         else:
             self._diag(
                 "UNSUPPORTED_SIGNAL_TYPE",
-                f"{symbol.name} has type {symbol.type} at {self._where(symbol.location)}; "
+                f"{name} has type {symbol.type} at {self._where(symbol.location)}; "
                 "its value is not reconstructed and reads of it stay unknown.",
             )
             width = max(1, canonical.bitstreamWidth)
             info = SignalInfo(
-                symbol.name, width, BitRange(left=width - 1, right=0), False, kind, span, True
+                name, width, BitRange(left=width - 1, right=0), False, kind, span, True
             )
-        self._signals[symbol.name] = info
+        self._signals[name] = info
 
     def _add_drivers(
         self,
@@ -432,7 +493,8 @@ class _Lowerer:
         written = set(by_target)
         for target, group in by_target.items():
             caveats = [caveat] if caveat else []
-            if edge_type is EdgeType.COMBINATIONAL and process is not ProcessKind.CONTINUOUS:
+            procedural = process not in (ProcessKind.CONTINUOUS, ProcessKind.PORT)
+            if edge_type is EdgeType.COMBINATIONAL and procedural:
                 caveats.extend(_intermediate_reads(assigns, group, written))
             self._drivers.setdefault(target, []).append(
                 Driver(
@@ -473,59 +535,133 @@ class _Lowerer:
 
     def _lower_net_initializer(self, symbol: ast.NetSymbol) -> None:
         initializer = symbol.initializer
-        info = self._signals.get(symbol.name)
+        name = f"{self._scope}{symbol.name}"
+        info = self._signals.get(name)
         if initializer is None or info is None:
             return
         span = self._span(initializer.sourceRange) or info.span
         rhs = self._lower(initializer)
         assign = GuardedAssign(
-            target=symbol.name,
+            target=name,
             full_write=True,
             rhs=rhs,
             guards=(),
             index_operands=(),
             blocking=True,
             span=span,
-            text=f"{symbol.name} = {self._text(initializer.sourceRange) or ir.to_sv(rhs)}",
+            text=f"{name} = {self._text(initializer.sourceRange) or ir.to_sv(rhs)}",
         )
         self._add_drivers(
             [assign], EdgeType.COMBINATIONAL, ProcessKind.CONTINUOUS, None, span, None, None
         )
 
-    def _lower_instance(self, instance: ast.InstanceSymbol) -> None:
-        reason = (
-            f"driven by instance {instance.name} of module {instance.definition.name}; "
-            "module instances are not traversed yet"
-        )
-        self._diag(
-            "UNSUPPORTED_INSTANCE",
-            f"Instance {instance.name} of {instance.definition.name} at "
-            f"{self._where(instance.location)} is not traversed; signals connected to its "
-            "outputs end the slice.",
-        )
-        span = self._line_span(instance.location)
+    def _lower_instance(self, instance: ast.InstanceSymbol, child_scope: str) -> None:
+        """Lower the port connections of ``instance``; called in the parent's scope."""
+        label = f"instance {child_scope[:-1]} of {instance.definition.name}"
+        where = self._where(instance.location)
+        fallback = self._line_span(instance.location)
         for connection in instance.portConnections:
             port = connection.port
-            if not isinstance(port, ast.PortSymbol) or port.direction is ast.ArgumentDirection.In:
+            internal = port.internalSymbol if isinstance(port, ast.PortSymbol) else None
+            child = f"{child_scope}{internal.name}" if internal is not None else None
+            if not isinstance(port, ast.PortSymbol) or child is None or child not in self._signals:
+                self._diag(
+                    "UNSUPPORTED_PORT",
+                    f"Port {port.name} of {label} at {where} is not a simple signal port; "
+                    "nothing is traced through it.",
+                )
                 continue
             expression = connection.expression
-            if expression is None:
-                continue
+            if port.direction is ast.ArgumentDirection.In:
+                if expression is None:
+                    self._diag(
+                        "UNCONNECTED_PORT",
+                        f"Input port {child} of {label} at {where} is not connected; it has no "
+                        "driver and a slice that reaches it ends there.",
+                    )
+                    continue
+                self._lower_input_port(child, expression, fallback)
+            elif port.direction is ast.ArgumentDirection.Out:
+                if expression is None:
+                    continue
+                if not isinstance(expression, ast.AssignmentExpression):
+                    self._diag(
+                        "UNSUPPORTED_PORT",
+                        f"Output port {child} of {label} at {where} has a connection that is not "
+                        "an assignable expression; nothing is traced through it.",
+                    )
+                    continue
+                self._lower_output_port(child, expression, fallback)
+            else:
+                self._lower_bidirectional_port(child, port, expression, label, where, fallback)
+
+    def _lower_input_port(
+        self, child: str, expression: ast.Expression, fallback: SourceSpan | None
+    ) -> None:
+        info = self._signals[child]
+        span = self._span(expression.sourceRange) or fallback
+        rhs = self._lower(expression)
+        if rhs.width != info.width:
+            rhs = ir.Convert(info.width, info.signed, rhs)
+        if isinstance(rhs, ir.SignalRef) and rhs.width == self._signals[rhs.signal].width:
+            # A plain whole-signal connection: the child signal is the same net.
+            self._aliases[child] = rhs.signal
+        text = f"{child} = {self._text(expression.sourceRange) or ir.to_sv(rhs)}"
+        assign = GuardedAssign(child, True, rhs, (), (), True, span, text)
+        self._add_drivers(
+            [assign], EdgeType.COMBINATIONAL, ProcessKind.PORT, None, span, None, None
+        )
+
+    def _lower_output_port(
+        self, child: str, expression: ast.AssignmentExpression, fallback: SourceSpan | None
+    ) -> None:
+        info = self._signals[child]
+        span = self._span(expression.sourceRange) or fallback
+        self._port_value = ir.SignalRef(info.width, info.signed and not info.is_aggregate, child)
+        assigns: list[GuardedAssign] = []
+        target_text = self._text(expression.left.sourceRange) or "<port connection>"
+        self._lower_assignment(expression, (), assigns, span, text=f"{target_text} = {child}")
+        self._port_value = None
+        self._add_drivers(
+            assigns, EdgeType.COMBINATIONAL, ProcessKind.PORT, None, span, None, None
+        )
+
+    def _lower_bidirectional_port(
+        self,
+        child: str,
+        port: ast.PortSymbol,
+        expression: ast.Expression | None,
+        label: str,
+        where: str,
+        fallback: SourceSpan | None,
+    ) -> None:
+        reason = (
+            f"connected through {port.direction.name} port {child} of {label}; "
+            "bidirectional ports are not traced"
+        )
+        self._diag(
+            "UNSUPPORTED_PORT",
+            f"{port.direction.name} port {child} of {label} at {where} is not traced; signals "
+            "on either side of it end the slice.",
+        )
+        targets = [child]
+        if expression is not None:
             lvalue = (
                 expression.left if isinstance(expression, ast.AssignmentExpression) else expression
             )
-            for target in self._targets(lvalue) or ():
-                self._drivers.setdefault(target.signal, []).append(
-                    Driver(
-                        target=target.signal,
-                        edge_type=EdgeType.COMBINATIONAL,
-                        process=ProcessKind.INSTANCE,
-                        clock=None,
-                        assigns=(),
-                        span=span,
-                        unsupported=reason,
-                    )
+            targets.extend(target.signal for target in self._targets(lvalue) or ())
+        for target in dict.fromkeys(targets):
+            self._drivers.setdefault(target, []).append(
+                Driver(
+                    target=target,
+                    edge_type=EdgeType.COMBINATIONAL,
+                    process=ProcessKind.INSTANCE,
+                    clock=None,
+                    assigns=(),
+                    span=fallback,
+                    unsupported=reason,
                 )
+            )
 
     def _lower_process(self, block: ast.ProceduralBlockSymbol) -> None:
         kind = block.procedureKind
@@ -728,6 +864,7 @@ class _Lowerer:
         guards: tuple[ir.Guard, ...],
         out: list[GuardedAssign],
         span: SourceSpan | None,
+        text: str | None = None,
     ) -> None:
         targets = self._targets(assignment.left)
         if assignment.isCompound:
@@ -747,7 +884,8 @@ class _Lowerer:
                 "the assignment is not in the graph.",
             )
             return
-        text = self._text(assignment.sourceRange) or f"<assignment> {ir.to_sv(rhs)}"
+        if text is None:
+            text = self._text(assignment.sourceRange) or f"<assignment> {ir.to_sv(rhs)}"
         whole = len(targets) == 1 and targets[0].width == rhs.width
         for target in targets:
             value = rhs
@@ -875,7 +1013,11 @@ class _Lowerer:
         return signal, False, (*index_operands, *dynamic)
 
     def _local_name(self, symbol: ast.Symbol) -> str | None:
-        """Name of a module-level signal, or None for anything else."""
+        """Path of a declared signal relative to the top instance, or None.
+
+        Every instance has its own elaborated body, so ``hierarchicalPath``
+        tells two instances of one module apart.
+        """
         path = symbol.hierarchicalPath
         if not path.startswith(self._prefix):
             return None
@@ -900,6 +1042,9 @@ class _Lowerer:
     def _lower_raw(self, expression: ast.Expression) -> ir.Expr:
         if isinstance(expression, ast.NamedValueExpression):
             return self._lower_named(expression)
+        if isinstance(expression, ast.EmptyArgumentExpression) and self._port_value is not None:
+            # The right-hand side of an output port connection: the child port's value.
+            return self._port_value
         info = _integral(expression.type)
         if info is None:
             return self._unsupported(expression, f"{expression.kind.name} of non-integral type", 1)

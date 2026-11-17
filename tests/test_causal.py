@@ -600,10 +600,12 @@ def test_always_forms_are_classified_by_their_event_control(tmp_path: Path) -> N
 def test_unsupported_constructs_are_reported_and_never_dropped(tmp_path: Path) -> None:
     design = build(
         tmp_path,
-        "module sub(input logic i, output logic o);\n  assign o = ~i;\nendmodule\n"
+        "module sub(input logic i, output logic o, inout wire io);\n  assign o = ~i;\n"
+        "endmodule\n"
         "module top(input logic clk, rst_n, en, input logic [3:0] a,\n"
-        "           output logic [3:0] cnt, loop, output logic q, lat, inst_out);\n"
-        "  sub u_sub(.i(a[0]), .o(inst_out));\n"
+        "           output logic [3:0] cnt, loop, output logic q, lat, inst_out,\n"
+        "           inout wire bus);\n"
+        "  sub u_sub(.i(a[0]), .o(inst_out), .io(bus));\n"
         "  always_ff @(posedge clk or negedge rst_n)\n"
         "    if (!rst_n) q <= 1'b0; else q <= a[0];\n"
         "  always_ff @(posedge clk) cnt += 4'd1;\n"
@@ -613,9 +615,13 @@ def test_unsupported_constructs_are_reported_and_never_dropped(tmp_path: Path) -
         "top.sv",
     )
     reported = {diagnostic.code for diagnostic in design.diagnostics}
-    assert {"UNSUPPORTED_INSTANCE", "UNSUPPORTED_STATEMENT"} <= reported
+    assert {"UNSUPPORTED_PORT", "UNSUPPORTED_STATEMENT"} <= reported
+    # The instance itself is traversed: its output port is an ordinary driver.
+    (port,) = design.drivers["inst_out"]
+    assert port.process is ProcessKind.PORT and port.unsupported is None
     for signal, fragment in [
-        ("inst_out", "instance u_sub"),
+        ("bus", "bidirectional ports are not traced"),
+        ("u_sub.io", "bidirectional ports are not traced"),
         ("q", "asynchronous reset"),
         ("cnt", "blocking assignment"),
         ("lat", "always_latch"),
@@ -1475,3 +1481,284 @@ def test_synthesize_assertion_works_from_a_report_alone(
     assert "|-> ##2 (!$isunknown(full) && (full == 1'b1));" in deep.assertion.text
     assert [d.code for d in deep.diagnostics] == ["SVA_LATENCY_ASSUMED"]
     assert compile_errors(design_text + "\n" + deep.assertion.text) == []
+
+
+# --------------------------------------------------------------------------
+# Module hierarchy (B-01)
+# --------------------------------------------------------------------------
+
+CORE_SV = """\
+module core (
+  input  logic       clk,
+  input  logic       rst_n,
+  input  logic       en,
+  input  logic [3:0] d,
+  output logic [3:0] q
+);
+  logic [3:0] r;
+  always_ff @(posedge clk) begin
+    if (!rst_n) r <= 4'd0;
+    else if (en) r <= d + 4'd1;
+  end
+  assign q = r;
+endmodule
+"""
+CORE_WRITE_LINE = 11
+
+HIER_TOP_SV = """\
+module top (
+  input  logic       clk,
+  input  logic       rst_n,
+  input  logic       en,
+  input  logic [3:0] a,
+  output logic [3:0] y
+);
+  logic [3:0] inner;
+  core u_core (.clk(clk), .rst_n(rst_n), .en(en), .d(a), .q(inner));
+  assign y = ~inner;
+endmodule
+"""
+
+
+def hier_provider() -> MockWaveformProvider:
+    """Trace of ``top``: ``u_core.r`` goes from 0011 to 0100 at the cycle 2 edge."""
+    values = {
+        "rst_n": "1",
+        "en": "1",
+        "a": "0011",
+        "u_core.rst_n": "1",
+        "u_core.en": "1",
+        "u_core.d": "0011",
+    }
+    changing: dict[str, Sequence[tuple[int, str]]] = {
+        name: [(0, "0011"), (25000, "0100")] for name in ("u_core.r", "u_core.q", "inner")
+    }
+    changing["y"] = [(0, "1100"), (25000, "1011")]
+    return static_provider(values, changing=changing)
+
+
+HIER_FAILURE = failure_at("y", 2, 25000, actual="1011", expected="1100")
+
+
+@pytest.fixture()
+def hier(tmp_path: Path) -> DesignGraph:
+    return build(tmp_path, CORE_SV + HIER_TOP_SV, "hier.sv")
+
+
+def test_child_ports_are_internal_signals_driven_by_their_connections(hier: DesignGraph) -> None:
+    signals = hier.signals
+    assert signals["a"].kind is SignalKind.INPUT and signals["y"].kind is SignalKind.OUTPUT
+    for name in ("u_core.clk", "u_core.d", "u_core.q", "u_core.r"):
+        assert signals[name].kind is SignalKind.INTERNAL, name
+    assert signals["u_core.d"].bit_range == BitRange(left=3, right=0)
+    (into,) = hier.drivers["u_core.d"]
+    assert (into.process, into.edge_type, into.unsupported) == (
+        ProcessKind.PORT,
+        EdgeType.COMBINATIONAL,
+        None,
+    )
+    assert into.assigns[0].text == "u_core.d = a"
+    assert ir.signals_of(into.assigns[0].rhs) == ("a",)
+    (out_of,) = hier.drivers["inner"]
+    assert out_of.process is ProcessKind.PORT and out_of.assigns[0].text == "inner = u_core.q"
+    (register,) = hier.drivers["u_core.r"]
+    assert register.clock is not None and register.clock.signal == "u_core.clk"
+    assert hier.canonical("u_core.clk") == "clk"
+    assert hier.canonical("u_core.d") == "a" and hier.canonical("inner") == "inner"
+    assert "UNSUPPORTED_INSTANCE" not in {d.code for d in hier.diagnostics}
+
+
+def test_slice_crosses_into_a_child_register_and_back_out_to_top_inputs(
+    hier: DesignGraph,
+) -> None:
+    report = slice_failure(HIER_FAILURE, hier_provider(), hier, OPTIONS)
+    assert not report.truncated and codes(report) == set()
+    assert CausalReport.model_validate_json(report.model_dump_json()) == report
+
+    chain = [
+        ("y", 2, SETTLED),
+        ("inner", 2, SETTLED),
+        ("u_core.q", 2, SETTLED),
+        ("u_core.r", 2, SETTLED),
+        ("u_core.d", 2, BEFORE),
+        ("a", 2, BEFORE),
+    ]
+    types = [edges_of(report, chain[i + 1], chain[i])[0].edge_type for i in range(len(chain) - 1)]
+    comb, seq = EdgeType.COMBINATIONAL, EdgeType.SEQUENTIAL
+    assert types == [comb, comb, comb, seq, comb]
+    assert node_of(report, "u_core.r", 2, SETTLED).signal_path == "tb.dut.u_core.r"
+    (enable,) = edges_of(report, ("u_core.en", 2, BEFORE), ("u_core.r", 2, SETTLED))
+    assert (enable.role, enable.branch) == (EdgeRole.CONTROL, BranchStatus.RETAINED)
+
+    targets = {edge.target for edge in report.edges}
+    leaves = {node.signal_path for node in report.nodes if node.id not in targets}
+    assert leaves == {"tb.dut.a", "tb.dut.en", "tb.dut.rst_n"}
+
+    top = report.suspects[0]
+    assert top.node_id == node_of(report, "u_core.r", 2, SETTLED).id
+    assert top.location is not None and top.location.line == CORE_WRITE_LINE
+    assert "changed tb.dut.u_core.r from 4'b0011 to 4'b0100" in top.reason
+
+
+def test_same_module_twice_with_different_parameters(tmp_path: Path) -> None:
+    design = build(
+        tmp_path,
+        "module stage #(parameter int W = 4, parameter logic [W-1:0] K = '0)\n"
+        "  (input logic [W-1:0] i, output logic [W-1:0] o);\n"
+        "  assign o = i ^ K;\n"
+        "endmodule\n"
+        "module top (input logic [3:0] a, input logic [7:0] b,\n"
+        "            output logic [3:0] x, output logic [7:0] z);\n"
+        "  stage #(.W(4), .K(4'h5)) u_n (.i(a), .o(x));\n"
+        "  stage #(.W(8), .K(8'hA0)) u_w (.i(b), .o(z));\n"
+        "endmodule\n",
+    )
+    assert design.signals["u_n.i"].width == 4 and design.signals["u_w.i"].width == 8
+    narrow = design.drivers["u_n.o"][0].assigns[0].rhs
+    wide = design.drivers["u_w.o"][0].assigns[0].rhs
+    assert ir.evaluate(narrow, {"u_n.i": Vec("0011")}.__getitem__).bits == "0110"
+    assert ir.evaluate(wide, {"u_w.i": Vec("00001111")}.__getitem__).bits == "10101111"
+
+    provider = static_provider(
+        {
+            "a": "0011", "b": "00001111", "x": "0110", "z": "10101111",
+            "u_n.i": "0011", "u_n.o": "0110", "u_w.i": "00001111", "u_w.o": "10101111",
+        }  # fmt: skip
+    )
+    # The design has no clock, so no assertion can be generated for it.
+    options = SliceOptions(trace_scope=SCOPE, synthesize_assertion=False)
+    report = slice_failure(
+        failure_at("z", 2, 25000, actual="10101111", expected="00001111"), provider, design, options
+    )
+    assert codes(report) == set() and not report.truncated
+    paths = {node.signal_path for node in report.nodes}
+    assert paths == {"tb.dut.z", "tb.dut.u_w.o", "tb.dut.u_w.i", "tb.dut.b"}
+    assert CausalReport.model_validate_json(report.model_dump_json()) == report
+
+
+CLOCKED_SV = """\
+module leafreg (input logic clk, input logic d, output logic q);
+  always_ff @(posedge clk) q <= d;
+endmodule
+module mid (input logic clk, input logic gate, input logic d, output logic q, output logic qg);
+  logic gclk;
+  assign gclk = clk & gate;
+  leafreg u_leaf (.clk(clk), .d(d), .q(q));
+  leafreg u_gated (.clk(gclk), .d(d), .q(qg));
+endmodule
+module top (input logic clk, input logic gate, input logic d, output logic q, output logic qg);
+  mid u_mid (.clk(clk), .gate(gate), .d(d), .q(q), .qg(qg));
+endmodule
+"""
+
+
+def clocked_provider() -> MockWaveformProvider:
+    names = (
+        "gate", "d", "q", "qg", "u_mid.d", "u_mid.q", "u_mid.qg", "u_mid.u_leaf.d",
+        "u_mid.u_leaf.q", "u_mid.u_gated.d", "u_mid.u_gated.q",
+    )  # fmt: skip
+    return static_provider(dict.fromkeys(names, "1"))
+
+
+def test_clock_passed_through_two_levels_is_the_failure_clock(tmp_path: Path) -> None:
+    design = build(tmp_path, CLOCKED_SV)
+    assert design.canonical("u_mid.u_leaf.clk") == "clk"
+    report = slice_failure(
+        failure_at("q", 2, 25000, actual="1", expected="0"), clocked_provider(), design, OPTIONS
+    )
+    assert not report.truncated and codes(report) == set()
+    (step,) = edges_of(report, ("u_mid.u_leaf.d", 2, BEFORE), ("u_mid.u_leaf.q", 2, SETTLED))
+    assert step.edge_type is EdgeType.SEQUENTIAL
+    assert has_node(report, "d")
+    assert CausalReport.model_validate_json(report.model_dump_json()) == report
+
+
+def test_gated_clock_is_not_an_alias_and_truncates_the_slice(tmp_path: Path) -> None:
+    design = build(tmp_path, CLOCKED_SV)
+    assert design.canonical("u_mid.u_gated.clk") == "u_mid.gclk"
+    report = slice_failure(
+        failure_at("qg", 2, 25000, actual="1", expected="0"), clocked_provider(), design, OPTIONS
+    )
+    assert report.truncated and "UNSUPPORTED_CLOCK" in codes(report)
+    assert has_node(report, "u_mid.u_gated.q") and not has_node(report, "u_mid.u_gated.d")
+    message = next(d.message for d in report.diagnostics if d.code == "UNSUPPORTED_CLOCK")
+    assert "tb.dut.u_mid.u_gated.q" in message
+    assert CausalReport.model_validate_json(report.model_dump_json()) == report
+
+
+def test_child_signal_missing_from_the_trace_keeps_both_branches(tmp_path: Path) -> None:
+    design = build(
+        tmp_path,
+        "module pick (input logic s, input logic [3:0] a, b, output logic [3:0] o);\n"
+        "  assign o = s ? a : b;\n"
+        "endmodule\n"
+        "module top (input logic sel, input logic [3:0] a, b, output logic [3:0] y);\n"
+        "  pick u_pick (.s(sel), .a(a), .b(b), .o(y));\n"
+        "endmodule\n",
+    )
+    provider = static_provider(
+        {
+            "sel": "1", "a": "1010", "b": "0101", "y": "1010",
+            "u_pick.a": "1010", "u_pick.b": "0101", "u_pick.o": "1010",
+        }  # fmt: skip
+    )
+    report = slice_failure(
+        failure_at("y", 2, 25000, actual="1010", expected="0101"), provider, design, OPTIONS
+    )
+    assert "SIGNAL_NOT_OBSERVED" in codes(report)
+    message = next(d.message for d in report.diagnostics if d.code == "SIGNAL_NOT_OBSERVED")
+    assert "tb.dut.u_pick.s" in message
+    out = ("u_pick.o", 2, SETTLED)
+    assert node_of(report, "u_pick.s", 2, SETTLED).value is None
+    assert branches(edges_of(report, ("u_pick.a", 2, SETTLED), out)) == {BranchStatus.UNKNOWN}
+    assert branches(edges_of(report, ("u_pick.b", 2, SETTLED), out)) == {BranchStatus.UNKNOWN}
+    # Both arms are followed out of the child to the top inputs.
+    assert has_node(report, "a") and has_node(report, "b") and has_node(report, "sel")
+    assert CausalReport.model_validate_json(report.model_dump_json()) == report
+
+
+def test_assertion_binds_with_hierarchical_references(hier: DesignGraph) -> None:
+    options = SliceOptions(trace_scope=SCOPE, reset_path="tb.dut.rst_n", reset_active="0")
+    report = slice_failure(HIER_FAILURE, hier_provider(), hier, options)
+    (assertion,) = report.assertions
+    text = assertion.text
+    assert "(u_core__d === 4'b0011)" in text
+    assert "|=> (!$isunknown(y) && (y == 4'b1100));" in text
+    bind = text.rstrip().splitlines()[-1]
+    assert bind.startswith("bind top waveroot_chk_a1 ")
+    assert ".u_core__d(u_core.d)" in bind and ".y(y)" in bind
+    design_text = CORE_SV + HIER_TOP_SV
+    assert compile_errors(design_text + "\n" + text) == []
+    # Negative control: a hierarchical reference that does not exist is rejected.
+    broken = text.replace("(u_core.d)", "(u_core.nope)")
+    assert compile_errors(design_text + "\n" + broken) != []
+
+
+def test_multi_file_design_hashes_every_file_and_points_into_the_child(tmp_path: Path) -> None:
+    core = tmp_path / "rtl" / "core.sv"
+    top = tmp_path / "rtl" / "top.sv"
+    core.parent.mkdir()
+    core.write_text(CORE_SV, encoding="utf-8")
+    top.write_text(HIER_TOP_SV, encoding="utf-8")
+    design = build_design_graph([top, core], root=tmp_path, top="top")
+    assert [(source.path, source.sha256) for source in design.sources] == [
+        ("rtl/core.sv", hashlib.sha256(core.read_bytes()).hexdigest()),
+        ("rtl/top.sv", hashlib.sha256(top.read_bytes()).hexdigest()),
+    ]
+    by_id = {source.id: source.path for source in design.sources}
+    report = slice_failure(HIER_FAILURE, hier_provider(), design, OPTIONS)
+    assert report.sources == design.sources
+    top_suspect = report.suspects[0]
+    assert top_suspect.location is not None
+    assert by_id[top_suspect.location.source_id] == "rtl/core.sv"
+    assert top_suspect.location.line == CORE_WRITE_LINE
+    # Port connections are located on the instance line of the parent's file. They share
+    # that line, so they collapse to one suspect.
+    lines = top.read_text(encoding="utf-8").splitlines()
+    wiring = [
+        s
+        for s in report.suspects
+        if s.location is not None and by_id[s.location.source_id] == "rtl/top.sv"
+        and "core u_core" in lines[s.location.line - 1]
+    ]
+    assert len(wiring) == 1
