@@ -1,0 +1,60 @@
+{
+  "record": "waveroot-track-c-run",
+  "record_version": 1,
+  "status": "error",
+  "exit_code": 2,
+  "case_id": "case_01_fifo_wrap",
+  "variant": "mutant",
+  "schedule": "directed",
+  "fixture_mode": false,
+  "comparison_adapter": {
+    "name": "track_c_selfcheck",
+    "kind": "benchmark_self_check"
+  },
+  "causal_adapter": null,
+  "primary_mode": "cycle",
+  "comparisons": {},
+  "causal": null,
+  "diagnostics": [
+    {
+      "code": "TIMEOUT",
+      "message": "build exceeded 0.05 s"
+    }
+  ],
+  "run": {
+    "status": "timeout",
+    "message": "build exceeded 0.05 s",
+    "simulator": "verilator",
+    "tool_version": "Verilator 5.020 2024-01-01 rev (Debian 5.020-1)",
+    "run_dir": "artifacts/case_01_fifo_wrap-mutant-directed-4cb9eb252855",
+    "steps": [
+      {
+        "name": "build",
+        "argv": [
+          "/usr/bin/verilator",
+          "--binary",
+          "--timing",
+          "--trace",
+          "--top-module",
+          "tb",
+          "--Mdir",
+          "artifacts/case_01_fifo_wrap-mutant-directed-4cb9eb252855/obj",
+          "benchmarks/case_01_fifo_wrap/tb/tb.sv",
+          "benchmarks/case_01_fifo_wrap/rtl/mutant/fifo.sv"
+        ],
+        "exit_code": -15,
+        "duration_s": 0.056,
+        "log": "build.log",
+        "log_bytes_total": 666,
+        "log_truncated": false
+      }
+    ],
+    "inputs_sha256": {
+      "rtl/mutant/fifo.sv": "27e38a8aa0b7373b819089f8ac1f29995ce45a773ff54f19c0e9e5492a19e14b",
+      "stim/directed.stim": "9e7e55d60262d1a2b7b953a1b5f54753ffe736de169386425d3aa8c8ec270692",
+      "tb/tb.sv": "ff8d5926ee0f8f07659296ab0de39d77485b3f28248c8971d9d05aee4979f630"
+    },
+    "trace": null,
+    "trace_sha256": null
+  }
+}

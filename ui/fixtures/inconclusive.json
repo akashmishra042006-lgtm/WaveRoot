@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "provenance": {
+    "kind": "synthetic_fixture",
+    "case_id": "ui_fixture",
+    "note": "UI fixture: inconclusive comparison with no graph."
+  },
+  "status": "inconclusive",
+  "failure": null,
+  "anchor_node_id": null,
+  "nodes": [],
+  "edges": [],
+  "suspects": [],
+  "sources": [],
+  "assertions": [],
+  "waveform": null,
+  "truncated": false,
+  "diagnostics": [
+    {
+      "code": "COVERAGE",
+      "message": "The trace ends before cycle 5 of epoch 0 was observed."
+    }
+  ]
+}

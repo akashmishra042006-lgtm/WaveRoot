@@ -1,0 +1,765 @@
+{
+  "schema_version": 1,
+  "provenance": {
+    "kind": "synthetic_fixture",
+    "case_id": "ui_fixture",
+    "note": "UI fixture: mock graph with timestamps above 2**53."
+  },
+  "status": "fail",
+  "failure": {
+    "kind": "value_mismatch",
+    "mode": "cycle",
+    "signal_path": "tb.dut.full",
+    "clock_path": "tb.dut.clk",
+    "observation": {
+      "epoch": 0,
+      "cycle": 3,
+      "phase": "settled",
+      "time_ps": "1152921504606901976"
+    },
+    "transaction_index": null,
+    "expected": {
+      "width": 1,
+      "bits": "1"
+    },
+    "actual": {
+      "width": 1,
+      "bits": "0"
+    },
+    "detail": "After the fourth accepted write the reference queue holds four entries, so full is expected high; the trace shows it low."
+  },
+  "anchor_node_id": "full.c3.settled",
+  "nodes": [
+    {
+      "id": "full.c3.settled",
+      "signal_path": "tb.dut.full",
+      "bit_range": null,
+      "observation": {
+        "epoch": 0,
+        "cycle": 3,
+        "phase": "settled",
+        "time_ps": "1152921504606901976"
+      },
+      "value": {
+        "width": 1,
+        "bits": "0"
+      },
+      "location": {
+        "source_id": "fifo-src",
+        "line": 23,
+        "end_line": 23
+      }
+    },
+    {
+      "id": "wptr.c3.settled",
+      "signal_path": "tb.dut.wptr",
+      "bit_range": null,
+      "observation": {
+        "epoch": 0,
+        "cycle": 3,
+        "phase": "settled",
+        "time_ps": "1152921504606901976"
+      },
+      "value": {
+        "width": 3,
+        "bits": "000"
+      },
+      "location": {
+        "source_id": "fifo-src",
+        "line": 37,
+        "end_line": 38
+      }
+    },
+    {
+      "id": "rptr.c3.settled",
+      "signal_path": "tb.dut.rptr",
+      "bit_range": null,
+      "observation": {
+        "epoch": 0,
+        "cycle": 3,
+        "phase": "settled",
+        "time_ps": "1152921504606901976"
+      },
+      "value": {
+        "width": 3,
+        "bits": "000"
+      },
+      "location": {
+        "source_id": "fifo-src",
+        "line": 42,
+        "end_line": 43
+      }
+    },
+    {
+      "id": "wptr.c3.before",
+      "signal_path": "tb.dut.wptr",
+      "bit_range": null,
+      "observation": {
+        "epoch": 0,
+        "cycle": 3,
+        "phase": "before",
+        "time_ps": "1152921504606901976"
+      },
+      "value": {
+        "width": 3,
+        "bits": "011"
+      },
+      "location": {
+        "source_id": "fifo-src",
+        "line": 35,
+        "end_line": 40
+      }
+    },
+    {
+      "id": "push.c3.before",
+      "signal_path": "tb.dut.push",
+      "bit_range": null,
+      "observation": {
+        "epoch": 0,
+        "cycle": 3,
+        "phase": "before",
+        "time_ps": "1152921504606901976"
+      },
+      "value": {
+        "width": 1,
+        "bits": "1"
+      },
+      "location": {
+        "source_id": "fifo-src",
+        "line": 28,
+        "end_line": 28
+      }
+    },
+    {
+      "id": "in_valid.c3.before",
+      "signal_path": "tb.dut.in_valid",
+      "bit_range": null,
+      "observation": {
+        "epoch": 0,
+        "cycle": 3,
+        "phase": "before",
+        "time_ps": "1152921504606901976"
+      },
+      "value": {
+        "width": 1,
+        "bits": "1"
+      },
+      "location": {
+        "source_id": "fifo-src",
+        "line": 7,
+        "end_line": 7
+      }
+    },
+    {
+      "id": "in_ready.c3.before",
+      "signal_path": "tb.dut.in_ready",
+      "bit_range": null,
+      "observation": {
+        "epoch": 0,
+        "cycle": 3,
+        "phase": "before",
+        "time_ps": "1152921504606901976"
+      },
+      "value": {
+        "width": 1,
+        "bits": "1"
+      },
+      "location": {
+        "source_id": "fifo-src",
+        "line": 27,
+        "end_line": 27
+      }
+    },
+    {
+      "id": "rptr.c3.before",
+      "signal_path": "tb.dut.rptr",
+      "bit_range": null,
+      "observation": {
+        "epoch": 0,
+        "cycle": 3,
+        "phase": "before",
+        "time_ps": "1152921504606901976"
+      },
+      "value": {
+        "width": 3,
+        "bits": "000"
+      },
+      "location": {
+        "source_id": "fifo-src",
+        "line": 42,
+        "end_line": 43
+      }
+    },
+    {
+      "id": "pop.c3.before",
+      "signal_path": "tb.dut.pop",
+      "bit_range": null,
+      "observation": {
+        "epoch": 0,
+        "cycle": 3,
+        "phase": "before",
+        "time_ps": "1152921504606901976"
+      },
+      "value": {
+        "width": 1,
+        "bits": "0"
+      },
+      "location": {
+        "source_id": "fifo-src",
+        "line": 26,
+        "end_line": 26
+      }
+    },
+    {
+      "id": "wptr.c2.settled",
+      "signal_path": "tb.dut.wptr",
+      "bit_range": null,
+      "observation": {
+        "epoch": 0,
+        "cycle": 2,
+        "phase": "settled",
+        "time_ps": "1152921504606891976"
+      },
+      "value": {
+        "width": 3,
+        "bits": "011"
+      },
+      "location": {
+        "source_id": "fifo-src",
+        "line": 35,
+        "end_line": 40
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e01",
+      "source": "wptr.c3.settled",
+      "target": "full.c3.settled",
+      "edge_type": "combinational",
+      "role": "data",
+      "branch": "retained",
+      "reason": "full compares the write pointer with the read pointer."
+    },
+    {
+      "id": "e02",
+      "source": "rptr.c3.settled",
+      "target": "full.c3.settled",
+      "edge_type": "combinational",
+      "role": "data",
+      "branch": "retained",
+      "reason": "full compares the write pointer with the read pointer."
+    },
+    {
+      "id": "e03",
+      "source": "wptr.c3.before",
+      "target": "wptr.c3.settled",
+      "edge_type": "sequential",
+      "role": "data",
+      "branch": "retained",
+      "reason": "Wrap arm taken at this clock edge: the pre-edge address bits are 11."
+    },
+    {
+      "id": "e04",
+      "source": "wptr.c3.before",
+      "target": "wptr.c3.settled",
+      "edge_type": "sequential",
+      "role": "data",
+      "branch": "pruned",
+      "reason": "Increment arm not taken: the pre-edge address bits are 11."
+    },
+    {
+      "id": "e05",
+      "source": "push.c3.before",
+      "target": "wptr.c3.settled",
+      "edge_type": "sequential",
+      "role": "control",
+      "branch": "retained",
+      "reason": "push was high before the edge, so the write pointer updates."
+    },
+    {
+      "id": "e06",
+      "source": "in_valid.c3.before",
+      "target": "push.c3.before",
+      "edge_type": "combinational",
+      "role": "data",
+      "branch": "retained",
+      "reason": "push is in_valid and in_ready."
+    },
+    {
+      "id": "e07",
+      "source": "in_ready.c3.before",
+      "target": "push.c3.before",
+      "edge_type": "combinational",
+      "role": "data",
+      "branch": "retained",
+      "reason": "push is in_valid and in_ready."
+    },
+    {
+      "id": "e08",
+      "source": "rptr.c3.before",
+      "target": "rptr.c3.settled",
+      "edge_type": "sequential",
+      "role": "data",
+      "branch": "retained",
+      "reason": "pop was low before the edge, so the read pointer holds its value."
+    },
+    {
+      "id": "e09",
+      "source": "pop.c3.before",
+      "target": "rptr.c3.settled",
+      "edge_type": "sequential",
+      "role": "control",
+      "branch": "retained",
+      "reason": "pop selects between holding and incrementing the read pointer."
+    },
+    {
+      "id": "e10",
+      "source": "wptr.c2.settled",
+      "target": "wptr.c3.before",
+      "edge_type": "combinational",
+      "role": "data",
+      "branch": "retained",
+      "reason": "Carry: the value settled at cycle 2 is unchanged before the cycle 3 edge."
+    }
+  ],
+  "suspects": [
+    {
+      "id": "s1",
+      "rank": 1,
+      "node_id": "wptr.c3.settled",
+      "location": {
+        "source_id": "fifo-src",
+        "line": 37,
+        "end_line": 38
+      },
+      "reason": "Fixture hypothesis: the wrap arm keeps the old wrap bit, so the write pointer returns to the read pointer's value.",
+      "evidence_node_ids": [
+        "wptr.c3.before",
+        "wptr.c3.settled",
+        "full.c3.settled"
+      ]
+    },
+    {
+      "id": "s2",
+      "rank": 2,
+      "node_id": "full.c3.settled",
+      "location": {
+        "source_id": "fifo-src",
+        "line": 23,
+        "end_line": 23
+      },
+      "reason": "Fixture hypothesis: the full comparison itself could be wrong; listed as a lower-ranked alternative.",
+      "evidence_node_ids": [
+        "wptr.c3.settled",
+        "rptr.c3.settled"
+      ]
+    }
+  ],
+  "sources": [
+    {
+      "id": "fifo-src",
+      "path": "tests/fixtures/mock_fifo_wrap.sv",
+      "sha256": "76726bf96aaae9b4a04de3777d660e2f31993a2807a098e8863d6b894b9bbed0"
+    }
+  ],
+  "assertions": [],
+  "waveform": {
+    "start_ps": "1152921504606866976",
+    "end_ps": "1152921504606946977",
+    "signals": [
+      {
+        "signal_path": "tb.dut.clk",
+        "width": 1,
+        "initial": {
+          "width": 1,
+          "bits": "0"
+        },
+        "samples": [
+          {
+            "time_ps": "1152921504606871976",
+            "value": {
+              "width": 1,
+              "bits": "1"
+            }
+          },
+          {
+            "time_ps": "1152921504606876976",
+            "value": {
+              "width": 1,
+              "bits": "0"
+            }
+          },
+          {
+            "time_ps": "1152921504606881976",
+            "value": {
+              "width": 1,
+              "bits": "1"
+            }
+          },
+          {
+            "time_ps": "1152921504606886976",
+            "value": {
+              "width": 1,
+              "bits": "0"
+            }
+          },
+          {
+            "time_ps": "1152921504606891976",
+            "value": {
+              "width": 1,
+              "bits": "1"
+            }
+          },
+          {
+            "time_ps": "1152921504606896976",
+            "value": {
+              "width": 1,
+              "bits": "0"
+            }
+          },
+          {
+            "time_ps": "1152921504606901976",
+            "value": {
+              "width": 1,
+              "bits": "1"
+            }
+          },
+          {
+            "time_ps": "1152921504606906976",
+            "value": {
+              "width": 1,
+              "bits": "0"
+            }
+          },
+          {
+            "time_ps": "1152921504606911976",
+            "value": {
+              "width": 1,
+              "bits": "1"
+            }
+          },
+          {
+            "time_ps": "1152921504606916976",
+            "value": {
+              "width": 1,
+              "bits": "0"
+            }
+          },
+          {
+            "time_ps": "1152921504606921976",
+            "value": {
+              "width": 1,
+              "bits": "1"
+            }
+          },
+          {
+            "time_ps": "1152921504606926976",
+            "value": {
+              "width": 1,
+              "bits": "0"
+            }
+          },
+          {
+            "time_ps": "1152921504606931976",
+            "value": {
+              "width": 1,
+              "bits": "1"
+            }
+          },
+          {
+            "time_ps": "1152921504606936976",
+            "value": {
+              "width": 1,
+              "bits": "0"
+            }
+          },
+          {
+            "time_ps": "1152921504606941976",
+            "value": {
+              "width": 1,
+              "bits": "1"
+            }
+          },
+          {
+            "time_ps": "1152921504606946976",
+            "value": {
+              "width": 1,
+              "bits": "0"
+            }
+          }
+        ]
+      },
+      {
+        "signal_path": "tb.dut.rst_n",
+        "width": 1,
+        "initial": {
+          "width": 1,
+          "bits": "1"
+        },
+        "samples": []
+      },
+      {
+        "signal_path": "tb.dut.in_valid",
+        "width": 1,
+        "initial": {
+          "width": 1,
+          "bits": "1"
+        },
+        "samples": [
+          {
+            "time_ps": "1152921504606916976",
+            "value": {
+              "width": 1,
+              "bits": "0"
+            }
+          }
+        ]
+      },
+      {
+        "signal_path": "tb.dut.in_ready",
+        "width": 1,
+        "initial": {
+          "width": 1,
+          "bits": "1"
+        },
+        "samples": []
+      },
+      {
+        "signal_path": "tb.dut.push",
+        "width": 1,
+        "initial": {
+          "width": 1,
+          "bits": "1"
+        },
+        "samples": [
+          {
+            "time_ps": "1152921504606916976",
+            "value": {
+              "width": 1,
+              "bits": "0"
+            }
+          }
+        ]
+      },
+      {
+        "signal_path": "tb.dut.pop",
+        "width": 1,
+        "initial": {
+          "width": 1,
+          "bits": "0"
+        },
+        "samples": [
+          {
+            "time_ps": "1152921504606911976",
+            "value": {
+              "width": 1,
+              "bits": "1"
+            }
+          },
+          {
+            "time_ps": "1152921504606921976",
+            "value": {
+              "width": 1,
+              "bits": "0"
+            }
+          }
+        ]
+      },
+      {
+        "signal_path": "tb.dut.wptr",
+        "width": 3,
+        "initial": {
+          "width": 3,
+          "bits": "000"
+        },
+        "samples": [
+          {
+            "time_ps": "1152921504606871976",
+            "value": {
+              "width": 3,
+              "bits": "001"
+            }
+          },
+          {
+            "time_ps": "1152921504606881976",
+            "value": {
+              "width": 3,
+              "bits": "010"
+            }
+          },
+          {
+            "time_ps": "1152921504606891976",
+            "value": {
+              "width": 3,
+              "bits": "011"
+            }
+          },
+          {
+            "time_ps": "1152921504606901976",
+            "value": {
+              "width": 3,
+              "bits": "000"
+            }
+          },
+          {
+            "time_ps": "1152921504606911976",
+            "value": {
+              "width": 3,
+              "bits": "001"
+            }
+          }
+        ]
+      },
+      {
+        "signal_path": "tb.dut.rptr",
+        "width": 3,
+        "initial": {
+          "width": 3,
+          "bits": "000"
+        },
+        "samples": [
+          {
+            "time_ps": "1152921504606921976",
+            "value": {
+              "width": 3,
+              "bits": "001"
+            }
+          }
+        ]
+      },
+      {
+        "signal_path": "tb.dut.full",
+        "width": 1,
+        "initial": {
+          "width": 1,
+          "bits": "0"
+        },
+        "samples": []
+      },
+      {
+        "signal_path": "tb.dut.empty",
+        "width": 1,
+        "initial": {
+          "width": 1,
+          "bits": "1"
+        },
+        "samples": [
+          {
+            "time_ps": "1152921504606871976",
+            "value": {
+              "width": 1,
+              "bits": "0"
+            }
+          },
+          {
+            "time_ps": "1152921504606901976",
+            "value": {
+              "width": 1,
+              "bits": "1"
+            }
+          },
+          {
+            "time_ps": "1152921504606911976",
+            "value": {
+              "width": 1,
+              "bits": "0"
+            }
+          },
+          {
+            "time_ps": "1152921504606921976",
+            "value": {
+              "width": 1,
+              "bits": "1"
+            }
+          }
+        ]
+      },
+      {
+        "signal_path": "tb.dut.out_valid",
+        "width": 1,
+        "initial": {
+          "width": 1,
+          "bits": "0"
+        },
+        "samples": [
+          {
+            "time_ps": "1152921504606871976",
+            "value": {
+              "width": 1,
+              "bits": "1"
+            }
+          },
+          {
+            "time_ps": "1152921504606901976",
+            "value": {
+              "width": 1,
+              "bits": "0"
+            }
+          },
+          {
+            "time_ps": "1152921504606911976",
+            "value": {
+              "width": 1,
+              "bits": "1"
+            }
+          },
+          {
+            "time_ps": "1152921504606921976",
+            "value": {
+              "width": 1,
+              "bits": "0"
+            }
+          }
+        ]
+      },
+      {
+        "signal_path": "tb.dut.out_data",
+        "width": 8,
+        "initial": {
+          "width": 8,
+          "bits": "xxxxxxxx"
+        },
+        "samples": [
+          {
+            "time_ps": "1152921504606871976",
+            "value": {
+              "width": 8,
+              "bits": "00010001"
+            }
+          },
+          {
+            "time_ps": "1152921504606911976",
+            "value": {
+              "width": 8,
+              "bits": "01010101"
+            }
+          },
+          {
+            "time_ps": "1152921504606921976",
+            "value": {
+              "width": 8,
+              "bits": "00100010"
+            }
+          }
+        ]
+      }
+    ],
+    "unavailable": []
+  },
+  "truncated": true,
+  "diagnostics": [
+    {
+      "code": "SYNTHETIC_FIXTURE",
+      "message": "Graph, suspects, and ranking are fixture data, not analysis results."
+    },
+    {
+      "code": "SLICE_DEPTH_LIMIT",
+      "message": "The mock slice stops one cycle before the failure and at module inputs."
+    },
+    {
+      "code": "SIGNAL_NOT_OBSERVED",
+      "message": "The FIFO memory array is not present in the trace; out_data dependencies are omitted."
+    }
+  ]
+}

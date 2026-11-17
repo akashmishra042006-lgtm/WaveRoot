@@ -1,8 +1,9 @@
 # Track C handoff — current state
 
-Date: November 16, 2026. Latest role: Opus platform role (ticket C03).
-Branch: `feat/track-c-platform`, stacked on `feat/track-c-benchmarks`
-(PR #5, C01+C02), based on `main` at `b5d096d`. Not merged.
+Date: November 16, 2026. Latest work: ticket C05 (interface), done in the
+Opus session (the plan's "Astra" role is not a selectable model).
+Branch: `feat/track-c-ui`, stacked on `feat/track-c-platform` (PR #10, C03),
+which is stacked on `feat/track-c-benchmarks` (PR #5, C01+C02). Not merged.
 
 ## Team state at handoff
 
@@ -58,6 +59,45 @@ Manifests gained a `golden` block (module, modes, primary mode).
   are tested against real hanging `vvp` processes, with a guard test proving
   the process probe sees full command lines (`ps -eww`).
 
+## C05 — fixture-and-real-record milestone (not full integration)
+
+`ui/`: React + TypeScript (Vite), Vitest + Testing Library. See `ui/README.md`.
+
+- Reads CLI run records, mock fixtures, and bare `CausalReport`s; validates
+  schema 1 before rendering (unknown fields, widths, dangling references,
+  ranks, schema version).
+- Panels: header with real/sample labeling, first-failure strip with
+  jump-to-failure, ranked suspects, time-unrolled SVG graph with a keyboard
+  node list and pruned toggle, BigInt waveform with separate failure and
+  selection cursors, SHA-256-checked source viewer, assertion candidates.
+  Tabs below 700 px with shared selection; polite live announcements.
+- Designed states: empty, loading, pass, fail localized, fail unlocalized,
+  inconclusive/unsupported, infrastructure error (real TIMEOUT record),
+  validation error, missing source, revision mismatch, missing waveform
+  signal, unknown values, empty and oversized graphs.
+- Fixtures in `ui/fixtures/` are generated through `src/contracts.py`; five are
+  real CLI run records (Verilator FIFO pass/fail, fixture-causal run, Icarus X,
+  real timeout).
+
+Evidence:
+- `npm --prefix ui test` → 47 passed (acceptance scenarios 1–8 plus model
+  unit tests). `npm --prefix ui run build` → clean strict typecheck and build.
+- `python3 ui/scripts/visual_check.py` in Chrome 153: 1440/1024/768/375 px
+  have no page-level horizontal overflow and no overlapping controls; the
+  waveform scrolls inside its panel. Screenshots were inspected by eye.
+- Scenario 10, measured on this cloud container (Intel Xeon @ 2.30GHz,
+  headless Chrome 153): 100 signals × 1,000 transitions plus 1,000 nodes →
+  suspect selection 16.6 ms median (17.5 max), cursor step ~16 ms, initial
+  load ~0.4 s. The graph is not drawn above 400 nodes (list only), by design.
+  First measurement was 303 ms; fixed with path-based memoized tracks and a
+  cursor overlay.
+- Fixed during inspection: selecting a suspect scrolled the whole page under
+  the sticky header; source now scrolls inside its own box.
+
+Not done: the offline-API state (C06 has no API yet); causal graphs and
+waveform windows from real engines (Tracks A/B). Fixture-only UI is not full
+integration.
+
 ## C04 — blocked, not complete
 
 Requires real Track A and Track B modules on `main`; neither is present. The
@@ -79,6 +119,5 @@ reported as Track A coverage.
 
 ## Next single ticket
 
-C05 (Astra frontend role, Prompt 3): UI against `ComparisonResult` and
-`CausalReport` using the mock fixture plus real run records from
-`python -m src.app.cli analyze ... --json`. C04 follows when A and B land.
+Independent cold review of C03+C05 (Prompt 5) in a fresh session. Then C04
+once Tracks A and B are on `main`, and C06 (local API) after it.
