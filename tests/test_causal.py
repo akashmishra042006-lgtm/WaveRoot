@@ -18,6 +18,7 @@ import random
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pyslang import ast, syntax
@@ -690,7 +691,8 @@ def test_always_forms_are_classified_by_their_event_control(tmp_path: Path) -> N
     )
     assert design.drivers["c1"][0].edge_type is EdgeType.COMBINATIONAL
     assert design.drivers["c2"][0].edge_type is EdgeType.COMBINATIONAL
-    assert design.drivers["c2"][0].caveats
+    # The event list names every signal the process reads, so it is exactly `always @*`.
+    assert design.drivers["c2"][0].unsupported is None and not design.drivers["c2"][0].caveats
     rising, falling = design.drivers["s1"][0].clock, design.drivers["s2"][0].clock
     assert rising is not None and rising.rising
     assert falling is not None and not falling.rising
@@ -3012,3 +3014,253 @@ def test_round2_finding3_latch_of_other_bits_does_not_truncate(tmp_path: Path) -
     assert has_node(low, "b")
     high = slice_failure(failure_at("hi", 2, 25000, "1111", "0000"), provider, design, OPTIONS)
     assert high.truncated and "NO_ACTIVE_ASSIGNMENT" in codes(high)
+
+
+# ---- PR #6 review round 3 (Astra re-audit at 5d765bd) ----------------------
+
+
+def test_round3_m1_partly_latched_combinational_value_truncates(tmp_path: Path) -> None:
+    """With en = 0, y[1] keeps an earlier value; the slice must not claim to be complete."""
+    design = build(
+        tmp_path,
+        "module m (input logic en, a, output logic [1:0] y);\n"
+        "  always_comb begin\n"
+        "    y[0] = a;\n"
+        "    if (en) y[1] = a;\n"
+        "  end\n"
+        "endmodule\n",
+    )
+    report = slice_failure(
+        failure_at("y", 2, 25000, actual="11", expected="01"),
+        static_provider({"en": "0", "a": "1", "y": "11"}),
+        design,
+        OPTIONS,
+    )
+    assert report.truncated and "PARTIAL_ASSIGNMENT" in codes(report)
+    stopped = next(s for s in report.suspects if s.node_id == node_of(report, "y", 2, SETTLED).id)
+    assert "slice stops" in stopped.reason
+    assert CausalReport.model_validate_json(report.model_dump_json()) == report
+
+
+@pytest.mark.parametrize(
+    ("body", "values"),
+    [
+        # A full default write executes first, so no bit can keep an old value.
+        (
+            "    y = '0;\n    y[0] = a[0];\n    if (en) y[1] = a[1];\n",
+            {"en": "0"},
+        ),
+        # Both arms of an if write all of y; which one runs is unknown (en is missing).
+        ("    if (en) y = a;\n    else y = b;\n", {}),
+        # A case with a default always takes some arm, and every arm writes y.
+        (
+            "    case (sel)\n      1'b0: y = a;\n      default: y = b;\n    endcase\n",
+            {"sel": "x"},
+        ),
+        # Nested: the else arm writes y in both of its own arms.
+        (
+            "    if (en) y = a;\n    else if (sel) y = b;\n    else y = '0;\n",
+            {"en": "0"},
+        ),
+    ],
+    ids=["default-first", "if-else-unknown", "case-default", "nested"],
+)
+def test_round3_m1_complete_combinational_processes_are_not_latches(
+    tmp_path: Path, body: str, values: dict[str, str]
+) -> None:
+    design = build(
+        tmp_path,
+        "module m (input logic en, sel, input logic [3:0] a, b, output logic [3:0] y);\n"
+        f"  always_comb begin\n{body}  end\n"
+        "endmodule\n",
+    )
+    report = slice_failure(PICK_FAILURE, static_provider({**PICK_VALUES, **values}), design, OPTIONS)
+    assert not {"PARTIAL_ASSIGNMENT", "NO_ACTIVE_ASSIGNMENT"} & codes(report)
+    assert node_of(report, "y", 2, SETTLED).id not in {
+        s.node_id for s in report.suspects if "slice stops" in s.reason
+    }
+
+
+def test_round3_m2_incomplete_event_list_stops_the_slice(tmp_path: Path) -> None:
+    """``@(a)`` never wakes for b; y may still hold a value computed while b was 1."""
+    design = build(
+        tmp_path,
+        "module m (input logic a, b, c, output logic y);\n"
+        "  always @(a) y = b ? a : c;\n"
+        "endmodule\n",
+    )
+    (driver,) = design.drivers["y"]
+    assert driver.unsupported is not None and "b, c" in driver.unsupported
+    report = slice_failure(
+        failure_at("y", 2, 25000, actual="1", expected="0"),
+        static_provider({"a": "1", "b": "0", "c": "0", "y": "1"}),
+        design,
+        OPTIONS,
+    )
+    assert report.truncated and "UNSUPPORTED_DRIVER" in codes(report)
+    assert not any(edge.branch is BranchStatus.PRUNED for edge in report.edges)
+
+
+def test_round3_m2_complete_event_list_is_combinational(tmp_path: Path) -> None:
+    """Control: an event list naming every read signal behaves like ``always @*``."""
+    design = build(
+        tmp_path,
+        "module m (input logic a, b, c, output logic y);\n"
+        "  logic t;\n"
+        "  always @(a or b or c) begin\n"
+        "    t = b;\n"
+        "    y = t ? a : c;\n"
+        "  end\n"
+        "endmodule\n",
+    )
+    (driver,) = design.drivers["y"]
+    assert driver.unsupported is None
+    report = slice_failure(
+        failure_at("y", 2, 25000, actual="0", expected="1"),
+        static_provider({"a": "1", "b": "0", "c": "0", "y": "0", "t": "0"}),
+        design,
+        OPTIONS,
+    )
+    assert "UNSUPPORTED_DRIVER" not in codes(report)
+
+
+def test_round3_m3_user_function_call_stops_the_slice(tmp_path: Path) -> None:
+    """The body of f reads a; the slice cannot see that, so it must not look complete."""
+    design = build(
+        tmp_path,
+        "module m (input logic a, output logic y);\n"
+        "  function automatic logic f();\n"
+        "    return a;\n"
+        "  endfunction\n"
+        "  assign y = f();\n"
+        "endmodule\n",
+    )
+    (driver,) = design.drivers["y"]
+    assert driver.unsupported is not None and "f" in driver.unsupported
+    report = slice_failure(
+        failure_at("y", 2, 25000, actual="1", expected="0"),
+        static_provider({"a": "1", "y": "1"}),
+        design,
+        OPTIONS,
+    )
+    assert report.truncated and "UNSUPPORTED_DRIVER" in codes(report)
+
+
+def test_round3_m3_system_calls_keep_the_driver(tmp_path: Path) -> None:
+    """Control: a system function reads only its arguments, which are all kept."""
+    design = build(
+        tmp_path,
+        "module m (input logic [3:0] a, output logic [3:0] y);\n"
+        "  assign y = 4'($countones(a));\n"
+        "endmodule\n",
+    )
+    assert design.drivers["y"][0].unsupported is None
+
+
+def test_round3_m4_node_limit_holds_during_expansion(tmp_path: Path) -> None:
+    inputs = [f"i{index}" for index in range(30)]
+    design = build(
+        tmp_path,
+        f"module m (input logic {', '.join(inputs)}, output logic y);\n"
+        f"  assign y = {' | '.join(inputs)};\n"
+        "endmodule\n",
+    )
+    report = slice_failure(
+        failure_at("y", 2, 25000, actual="1", expected="0"),
+        static_provider({**{name: "1" for name in inputs}, "y": "1"}),
+        design,
+        SliceOptions(trace_scope=SCOPE, max_nodes=5),
+    )
+    assert len(report.nodes) <= 5, len(report.nodes)
+    assert report.truncated and "SLICE_NODE_LIMIT" in codes(report)
+    assert CausalReport.model_validate_json(report.model_dump_json()) == report
+
+
+def test_round3_m5_hold_scans_stay_linear(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """y reads the held q at every cycle; each read must not rescan q's whole hold.
+
+    Trace values are cached, so the count that grew quadratically is the number of
+    hold checks, not provider queries.
+    """
+    from src.causal import backward_slicer
+
+    calls = 0
+    held = backward_slicer._Slicer._held
+
+    def counting(self: object, *args: Any) -> bool:
+        nonlocal calls
+        calls += 1
+        return held(self, *args)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(backward_slicer._Slicer, "_held", counting)
+    design = build(
+        tmp_path,
+        "module m (input logic clk, en, d, output logic y);\n"
+        "  logic q;\n"
+        "  always_ff @(posedge clk) if (en) q <= d;\n"
+        "  always_ff @(posedge clk) y <= y ^ q;\n"
+        "endmodule\n",
+    )
+
+    def hold_checks(cycles: int) -> int:
+        nonlocal calls
+        calls = 0
+        edges = tuple(5000 + 10000 * cycle for cycle in range(cycles))
+        signals: dict[str, Sequence[tuple[int, str]]] = {"clk": clock_samples(edges)}
+        signals.update({"en": [(0, "0")], "d": [(0, "1")], "q": [(0, "0")], "y": [(0, "0")]})
+        provider = MockWaveformProvider(make_trace(edges[-1] + 5000, signals))
+        failure = failure_at("y", cycles - 1, edges[-1], actual="0", expected="1")
+        options = SliceOptions(trace_scope=SCOPE, max_nodes=100_000, include_waveform=False)
+        report = slice_failure(failure, provider, design, options)
+        assert not report.truncated
+        return calls
+
+    small, large = hold_checks(100), hold_checks(400)
+    # Linear work grows about 4x for 4x the cycles; the quadratic scan grew about 16x.
+    assert large < 6 * small, (small, large)
+    assert large < 4 * 400, large
+
+
+def test_round3_m1_bit_demand_checks_only_the_followed_bits(tmp_path: Path) -> None:
+    """With bit demand (B-03), partial writes that cover a bit on every path are proven."""
+    design = build(
+        tmp_path,
+        "module m (input logic en, input logic [1:0] a, b, output logic [1:0] lo, hi);\n"
+        "  logic [3:0] y;\n"
+        "  always_comb begin\n"
+        "    y[1:0] = a;\n"
+        "    if (en) y[3:2] = b;\n"
+        "  end\n"
+        "  assign lo = y[1:0];\n"
+        "  assign hi = y[3:2];\n"
+        "endmodule\n",
+    )
+    provider = static_provider(
+        {"en": "0", "a": "01", "b": "00", "y": "1101", "lo": "01", "hi": "11"}
+    )
+    low = slice_failure(failure_at("lo", 2, 25000, "01", "00"), provider, design, OPTIONS)
+    assert not low.truncated and "PARTIAL_ASSIGNMENT" not in codes(low)
+    assert has_node(low, "a")
+    # For the high bits only the en-guarded write could act, and it does not execute.
+    high = slice_failure(failure_at("hi", 2, 25000, "11", "00"), provider, design, OPTIONS)
+    assert high.truncated and "NO_ACTIVE_ASSIGNMENT" in codes(high)
+
+
+def test_round3_m1_partial_writes_that_cover_every_bit_are_complete(tmp_path: Path) -> None:
+    design = build(
+        tmp_path,
+        "module m (input logic sel, input logic [1:0] a, b, output logic [3:0] y);\n"
+        "  always_comb begin\n"
+        "    y[1:0] = a;\n"
+        "    if (sel) y[3:2] = a;\n"
+        "    else y[3:2] = b;\n"
+        "  end\n"
+        "endmodule\n",
+    )
+    report = slice_failure(
+        failure_at("y", 2, 25000, "0101", "0000"),
+        static_provider({"a": "01", "b": "01", "y": "0101"}),
+        design,
+        OPTIONS,
+    )
+    assert "PARTIAL_ASSIGNMENT" not in codes(report)

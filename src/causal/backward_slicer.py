@@ -32,13 +32,14 @@ from __future__ import annotations
 
 import re
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Final
 
 from src.causal import expr as ir
 from src.causal import fourstate as fs
-from src.causal.ast_graph import DesignGraph, Driver, GuardedAssign, SignalKind
+from src.causal.ast_graph import DesignGraph, Driver, GuardedAssign, ProcessKind, SignalKind
 from src.causal.fourstate import Tri, Vec
 from src.causal.sva_synth import synthesize_assertion
 from src.contracts import (
@@ -249,6 +250,41 @@ class _Decision:
     all_blocked: bool = True
 
 
+def _covers(paths: list[tuple[ir.Guard, ...]], outcome: Callable[[ir.Guard], Tri]) -> bool:
+    """True when every execution of a process reaches one of ``paths``.
+
+    Each path is the guard chain of a full write. A guard chain is reached
+    unconditionally when it is empty. Otherwise one ``if`` or ``case`` decision
+    covers when the arm it is known to take is covered, or, when that arm is
+    not known, the decision always takes some arm (an ``if`` with an ``else``,
+    a ``case`` with a ``default``) and every arm it may take is covered.
+    Anything else, including a ``case`` whose items happen to be exhaustive,
+    is not proven, so the answer errs towards "may keep a stored value".
+    """
+    if any(not path for path in paths):
+        return True
+    decisions: dict[int, dict[ir.Guard, list[tuple[ir.Guard, ...]]]] = {}
+    for path in paths:
+        decisions.setdefault(path[0].decision, {}).setdefault(path[0], []).append(path[1:])
+    for arms in decisions.values():
+        taken = [guard for guard in arms if outcome(guard) is Tri.TRUE]
+        if taken:
+            if _covers(arms[taken[0]], outcome):
+                return True
+            continue
+        kinds = {(guard.kind, guard.polarity) for guard in arms}
+        complete = {(ir.GuardKind.IF, True), (ir.GuardKind.IF, False)} <= kinds or any(
+            kind is ir.GuardKind.CASE_DEFAULT for kind, _ in kinds
+        )
+        if complete and all(
+            _covers(tails, outcome)
+            for guard, tails in arms.items()
+            if outcome(guard) is not Tri.FALSE
+        ):
+            return True
+    return False
+
+
 def _plural(count: int, singular: str, plural: str) -> str:
     return f"{count} {singular if count == 1 else plural}"
 
@@ -291,6 +327,8 @@ class _Slicer:
         self._expanded: set[_Key] = set()
         self._diagnostics: dict[Diagnostic, None] = {}
         self._truncated = False
+        # (signal, demanded bits, cycle) -> the cycle a hold scan starting there ends at.
+        self._hold_origins: dict[tuple[str, int, int], int] = {}
 
     # ---- entry ----------------------------------------------------------
 
@@ -331,18 +369,21 @@ class _Slicer:
             key = self._queue.popleft()
             self._queued.discard(key)
             if len(self._nodes) >= self._options.max_nodes:
-                self._stop(
-                    self._nodes[key],
-                    "SLICE_NODE_LIMIT",
-                    f"The slice reached the limit of {self._options.max_nodes} nodes; nodes "
-                    "beyond it were not expanded.",
-                )
+                self._node_limit(self._nodes[key])
                 continue
             if key in self._expanded:
                 self._reset(key)
             self._expanded.add(key)
             self._expand(key)
         return self._report(anchor)
+
+    def _node_limit(self, node: _Node) -> None:
+        self._stop(
+            node,
+            "SLICE_NODE_LIMIT",
+            f"The slice reached the limit of {self._options.max_nodes} nodes; nodes beyond it "
+            "were not added or expanded.",
+        )
 
     def _reset(self, key: _Key) -> None:
         """Forget an expansion, so the node can be expanded again for more bits.
@@ -549,6 +590,10 @@ class _Slicer:
             )
             return
         if branch is BranchStatus.PRUNED and not self._options.include_pruned:
+            return
+        if source not in self._nodes and len(self._nodes) >= self._options.max_nodes:
+            # The budget holds during expansion, not only between nodes.
+            self._node_limit(self._nodes[target])
             return
         self._node(source)
         identity = (source, target, edge_type, role, branch)
@@ -864,7 +909,58 @@ class _Slicer:
                 f"No assignment to {path} executes {when}; the process leaves it undriven or "
                 "infers storage, which is outside the MVP, so its value is not traced.",
             )
+        elif unwritten and driver.process is not ProcessKind.CONTINUOUS:
+            exposed = self._exposed(driver, live, signal, unwritten, lookup)
+            if exposed:
+                # Those bits may keep a value from an earlier evaluation: a partial latch.
+                self._stop(
+                    node,
+                    "PARTIAL_ASSIGNMENT",
+                    f"No assignment is certain to write {self._bits_text(signal, exposed)} of "
+                    f"{path} {when}, so they may keep a value from an earlier evaluation "
+                    "(inferred storage, which is outside the MVP); its value is not traced.",
+                )
         self._classify(node, driver, live, outcomes)
+
+    def _exposed(
+        self,
+        driver: Driver,
+        live: list[tuple[GuardedAssign, _Verdict]],
+        signal: str,
+        bits: int,
+        lookup: ir.Lookup,
+    ) -> int:
+        """Bits of ``bits`` this process writes on some path but not on every path.
+
+        Bits the process never writes belong to other drivers. A bit is covered
+        when the exact writes of it form a complete cover (see ``_covers``);
+        a write whose bits depend on a run-time index covers nothing.
+        """
+        possible = 0
+        for assign in driver.assigns:
+            possible |= self._written(assign, signal)[0]
+        exact = [
+            (assign.guards, written)
+            for assign, _ in live
+            for written, known in [self._written(assign, signal)]
+            if known
+        ]
+        exposed = 0
+        verdict: dict[tuple[int, ...], bool] = {}
+        remaining, bit = bits & possible, 0
+        while remaining:
+            if remaining & 1:
+                writers = tuple(index for index, (_, mask) in enumerate(exact) if mask >> bit & 1)
+                if writers not in verdict:
+                    verdict[writers] = _covers(
+                        [exact[index][0] for index in writers],
+                        lambda guard: ir.evaluate_guard(guard, lookup),
+                    )
+                if not verdict[writers]:
+                    exposed |= 1 << bit
+            remaining >>= 1
+            bit += 1
+        return exposed
 
     def _unselected(
         self, guard: ir.Guard, assign: GuardedAssign, signal: str, when: str
@@ -1146,12 +1242,20 @@ class _Slicer:
         if not self._options.expand_holds:
             # Never scan past the depth limit: the work stays bounded by it.
             floor = 0 if limit is None else self._anchor_cycle - limit
-            while (
-                source_cycle > 0
-                and source_cycle >= floor
-                and self._held(signal, drivers, source_cycle, demand)
-            ):
+            # Holds already scanned for these bits are reused, so tracing a held value
+            # from every cycle of a long window stays linear in the window.
+            scanned: list[int] = []
+            while source_cycle > 0 and source_cycle >= floor:
+                known = self._hold_origins.get((signal, demand, source_cycle))
+                if known is not None:
+                    source_cycle = known
+                    break
+                if not self._held(signal, drivers, source_cycle, demand):
+                    break
+                scanned.append(source_cycle)
                 source_cycle -= 1
+            for start in scanned:
+                self._hold_origins[(signal, demand, start)] = source_cycle
         if limit is not None and self._anchor_cycle - source_cycle > limit:
             self._stop(
                 node,

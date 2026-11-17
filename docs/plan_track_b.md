@@ -55,15 +55,18 @@ Reported but not traversed (the slice stops there and sets `truncated`):
 `inout`, `ref`, and interface ports; unconnected input ports; instance arrays
 and generate blocks; asynchronous reset or several edge events;
 `always_latch`; blocking assignments inside a clocked process; undriven
-internal signals.
+internal signals; calls to user-defined functions (their bodies may read
+signals that are not arguments); level-sensitive event lists that do not name
+every signal the process reads.
 
 Kept as unknown dependencies (every operand is retained, nothing is
-evaluated): loops and other unmodeled statements, `inside`, function calls
-other than `$signed` and `$unsigned`; array slices, sub-arrays,
+evaluated): loops and other unmodeled statements, `inside`, system function
+calls other than `$signed` and `$unsigned`; array slices, sub-arrays,
 multi-dimensional and replicated assignment patterns, and whole-value
 assignments from anything but a same-shaped value or a pattern; arrays above
 the element cap or with negative indices (one aggregate signal,
-`ARRAY_NOT_EXPANDED`); struct and array ports.
+`ARRAY_NOT_EXPANDED`); struct and array ports. A level-sensitive event list
+that names every signal the process reads is treated exactly like `always @*`.
 
 ### 1.1 How the slicer treats time
 
@@ -121,9 +124,21 @@ boundary. Track C must pass both from the manifest.
 - A combinational process in which no assignment executes (an inferred latch,
   or an undriven path) ends the slice with `truncated` and
   `NO_ACTIVE_ASSIGNMENT`.
-- A process with an intra-assignment delay (`q <= #1 d`) is an unsupported
-  driver; the slice stops there.
-- `max_cycles_back` bounds the hold scan as well as the slice.
+- A combinational process (not a continuous assignment) may keep bits from
+  an earlier evaluation when it writes them on some paths but cannot be shown
+  to write them on every path. If such a bit is one the slice follows, the
+  slice ends there with `truncated` and `PARTIAL_ASSIGNMENT`. A bit is covered
+  by its exact writes (bits known at elaboration): an unconditional one, one
+  in an arm known to be taken, or an `if` with an `else` or a `case` with a
+  `default` whose every possible arm writes it. Bits the process never writes
+  belong to other drivers and are not checked against it.
+- A process with an intra-assignment delay (`q <= #1 d`), a call to a
+  user-defined function, or an incomplete level-sensitive event list is an
+  unsupported driver; the slice stops there.
+- `max_cycles_back` bounds the hold scan as well as the slice, and
+  `max_nodes` bounds the report: no node is added past it.
+- A hold scan is remembered per signal, demanded bits, and start cycle, so
+  tracing a held value from every cycle of a long window stays linear.
 
 ## 2. Rules for every ticket
 
