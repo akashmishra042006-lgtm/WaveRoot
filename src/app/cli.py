@@ -3,6 +3,7 @@
     python -m src.app.cli analyze MANIFEST --variant mutant --schedule directed
     python -m src.app.cli compare --trace TRACE --golden GOLDEN
     python -m src.app.cli open REPORT_JSON
+    python -m src.app.cli serve [--root benchmarks] [--port 8765]
 
 Exit codes follow spec.md section 8.4: 0 pass, 1 fail, 2 invalid_input or
 error, 3 unsupported or inconclusive. Ctrl-C cancels a running simulation and
@@ -27,6 +28,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from types import FrameType
 
+from src.app.api import DEFAULT_DEV_ORIGINS, ApiConfig, ApiServer
 from src.app.adapters import ComparisonAdapter, FixtureCausal, SelfCheckComparison, WaveformComparison
 from src.app.runner import Limits, Runner
 from src.app.service import EXIT_CODES, AnalysisOutcome, AnalysisService, load_report
@@ -76,6 +78,18 @@ def _parser() -> argparse.ArgumentParser:
 
     compare = sub.add_parser("compare", help="compare a saved trace with a golden using Track A's engine")
     add_waveform_arguments(compare)
+
+    serve = sub.add_parser("serve", help="start the local API (127.0.0.1 only)")
+    serve.add_argument("--root", type=Path, default=Path("benchmarks"),
+                       help="directory holding the benchmark cases the API may run")
+    serve.add_argument("--artifacts", type=Path, default=DEFAULT_ARTIFACTS)
+    serve.add_argument("--host", default="127.0.0.1", help="a loopback IPv4 address")
+    serve.add_argument("--port", type=int, default=8765)
+    serve.add_argument("--allow-origin", action="append", default=None, metavar="ORIGIN",
+                       help="web origin allowed to call the API, repeatable "
+                            f"(default: Vite dev/preview {', '.join(DEFAULT_DEV_ORIGINS[:2])} and :4173)")
+    serve.add_argument("--timeout", type=float, default=180.0, help="wall-clock seconds per job")
+    serve.add_argument("--jobs", type=int, default=1, help="jobs that may run at once")
 
     open_ = sub.add_parser("open", help="validate and summarize a saved run record")
     open_.add_argument("report", type=Path)
@@ -142,6 +156,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if isinstance(diag, dict):
                     print(f"  {diag.get('code')}: {diag.get('message')}")
         return EXIT_CODES[status]
+
+    if args.command == "serve":
+        try:
+            server = ApiServer(ApiConfig(
+                root=args.root, artifacts=args.artifacts, host=args.host, port=args.port,
+                extra_origins=tuple(args.allow_origin) if args.allow_origin else DEFAULT_DEV_ORIGINS,
+                timeout_s=args.timeout, max_concurrent=args.jobs,
+            ))
+        except (ValueError, OSError) as exc:
+            print(f"cannot start the API: {exc}", file=sys.stderr)
+            return 2
+        print(f"WaveRoot API on {server.origin}  (cases under {args.root}; Ctrl-C to stop)", flush=True)
+        server.serve_forever()
+        return 0
 
     if args.command == "compare":
         result = run_comparison(options_from_namespace(args))
