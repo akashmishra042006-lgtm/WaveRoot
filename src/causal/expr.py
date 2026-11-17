@@ -76,10 +76,55 @@ class IndexedSelect(Expr):
 
 @dataclass(frozen=True, slots=True)
 class ArrayElement(Expr):
-    """An element of an unpacked array. Its value is not reconstructed yet."""
+    """An element of an unpacked array kept as one aggregate signal.
+
+    Used for arrays that are not expanded into element signals (too many
+    elements, or elements of a non-integral type). Its value is not
+    reconstructed.
+    """
 
     array: Expr
     index: Expr
+
+
+@dataclass(frozen=True, slots=True)
+class ArrayRead(Expr):
+    """A run-time indexed read of an unpacked array expanded into element signals.
+
+    ``elements`` are the element signals in row-major order, each dimension
+    running from its declared left bound to its right bound. ``indices`` are
+    the index expressions and ``ranges`` the declared ``(left, right)`` bounds,
+    one per dimension. ``decisions`` numbers the element selection of each
+    dimension, as ``Guard.decision`` does for ``if`` and ``case``.
+
+    Following IEEE 1800 section 7.4.6, an index with an ``x`` or ``z`` bit or
+    outside the declared range reads all-``x``.
+    """
+
+    name: str
+    elements: tuple[SignalRef, ...]
+    indices: tuple[Expr, ...]
+    ranges: tuple[tuple[int, int], ...]
+    decisions: tuple[int, ...]
+
+
+def dimension_size(bounds: tuple[int, int]) -> int:
+    return abs(bounds[0] - bounds[1]) + 1
+
+
+def dimension_indices(bounds: tuple[int, int]) -> tuple[int, ...]:
+    """Declared indices of one unpacked dimension, from its left bound to its right."""
+    left, right = bounds
+    step = 1 if right >= left else -1
+    return tuple(range(left, right + step, step))
+
+
+def element_indices(ranges: tuple[tuple[int, int], ...]) -> tuple[tuple[int, ...], ...]:
+    """Declared index tuples of every element, in row-major order."""
+    combos: list[tuple[int, ...]] = [()]
+    for bounds in ranges:
+        combos = [(*prefix, index) for prefix in combos for index in dimension_indices(bounds)]
+    return tuple(combos)
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,6 +202,8 @@ def _evaluate(expr: Expr, lookup: Lookup) -> Vec:
         return Vec(bits, expr.signed) if len(bits) == expr.width else fs.unknown(expr.width)
     if isinstance(expr, IndexedSelect):
         return _indexed_select(expr, lookup)
+    if isinstance(expr, ArrayRead):
+        return _array_read(expr, lookup)
     if isinstance(expr, Unary):
         return fs.unary(expr.op, evaluate(expr.operand, lookup), expr.width, expr.signed)
     if isinstance(expr, Binary):
@@ -208,6 +255,25 @@ def _indexed_select(expr: IndexedSelect, lookup: Lookup) -> Vec:
     return Vec("".join(chunks), expr.signed)
 
 
+def _array_read(expr: ArrayRead, lookup: Lookup) -> Vec:
+    flat = 0
+    for bounds, index_expr in zip(expr.ranges, expr.indices):
+        index = evaluate(index_expr, lookup)
+        if not index.is_known:
+            return fs.unknown(expr.width, expr.signed)
+        value = index.to_int()
+        left, right = bounds
+        position = left - value if left >= right else value - left
+        size = dimension_size(bounds)
+        if not 0 <= position < size:
+            return fs.unknown(expr.width, expr.signed)
+        flat = flat * size + position
+    element = evaluate(expr.elements[flat], lookup)
+    if element.width != expr.width:
+        return fs.unknown(expr.width, expr.signed)
+    return Vec(element.bits, expr.signed)
+
+
 def children(expr: Expr) -> tuple[Expr, ...]:
     """Direct operands of ``expr`` in source order."""
     if isinstance(expr, PartSelect):
@@ -216,6 +282,8 @@ def children(expr: Expr) -> tuple[Expr, ...]:
         return (expr.value, expr.index)
     if isinstance(expr, ArrayElement):
         return (expr.array, expr.index)
+    if isinstance(expr, ArrayRead):
+        return (*expr.indices, *expr.elements)
     if isinstance(expr, (Unary, Replicate, Convert)):
         return (expr.operand,)
     if isinstance(expr, Binary):
@@ -258,6 +326,7 @@ class GuardKind(StrEnum):
     TERNARY = "ternary"
     CASE_ITEM = "case_item"
     CASE_DEFAULT = "case_default"
+    INDEX = "index"
     UNSUPPORTED = "unsupported"
 
 
@@ -269,7 +338,8 @@ class Guard:
     two arms of one ``if`` share it. For a case item, ``items`` are the
     expressions of this arm and ``earlier`` those of every arm before it, which
     encodes first-match priority. A default arm has no ``items`` and lists
-    every arm in ``earlier``.
+    every arm in ``earlier``. An ``index`` guard holds when ``predicate``, an
+    unpacked array index, equals the declared index ``element``.
     """
 
     decision: int
@@ -281,12 +351,32 @@ class Guard:
     items: tuple[Expr, ...] = ()
     earlier: tuple[Expr, ...] = ()
     span: SourceSpan | None = None
+    element: int | None = None
+
+
+def index_guard(
+    decision: int, index: Expr, element: int, text: str | None = None, span: SourceSpan | None = None
+) -> Guard:
+    """The guard "``index`` selects the element with declared index ``element``"."""
+    return Guard(
+        decision=decision,
+        kind=GuardKind.INDEX,
+        predicate=index,
+        text=to_sv(index) if text is None else text,
+        span=span,
+        element=element,
+    )
 
 
 def evaluate_guard(guard: Guard, lookup: Lookup) -> Tri:
     """Whether ``guard`` selects its branch: true, false, or unknown."""
     if guard.kind is GuardKind.UNSUPPORTED:
         return Tri.UNKNOWN
+    if guard.kind is GuardKind.INDEX:
+        index = evaluate(guard.predicate, lookup)
+        if not index.is_known:
+            return Tri.UNKNOWN
+        return Tri.TRUE if index.to_int() == guard.element else Tri.FALSE
     if guard.kind in (GuardKind.IF, GuardKind.TERNARY):
         outcome = fs.truth(evaluate(guard.predicate, lookup))
         return outcome if guard.polarity else fs.tri_not(outcome)
@@ -311,6 +401,8 @@ def describe_guard(guard: Guard) -> str:
     """Human-readable form of the condition under which the guard holds."""
     if guard.kind is GuardKind.UNSUPPORTED:
         return f"unsupported construct ({guard.text})"
+    if guard.kind is GuardKind.INDEX:
+        return f"{guard.text} == {guard.element}"
     if guard.kind in (GuardKind.IF, GuardKind.TERNARY):
         return guard.text if guard.polarity else f"!({guard.text})"
     if guard.kind is GuardKind.CASE_DEFAULT:
@@ -339,7 +431,8 @@ def collect_reads(
     """Signals read by ``expr``.
 
     Operands of a ``?:`` predicate and of a run-time select index are control
-    reads. Operands inside a ``?:`` arm carry a guard for that arm.
+    reads. Operands inside a ``?:`` arm carry a guard for that arm, and each
+    element of an ``ArrayRead`` carries an ``index`` guard per dimension.
     """
     found: dict[Read, None] = {}
     _collect(expr, role, guards, found)
@@ -370,6 +463,18 @@ def _collect(
     elif isinstance(expr, ArrayElement):
         _collect(expr.array, role, guards, found)
         _collect(expr.index, EdgeRole.CONTROL, guards, found)
+    elif isinstance(expr, ArrayRead):
+        for index in expr.indices:
+            _collect(index, EdgeRole.CONTROL, guards, found)
+        texts = [to_sv(index) for index in expr.indices]
+        for declared, element in zip(element_indices(expr.ranges), expr.elements):
+            selection = tuple(
+                index_guard(decision, index, value, text)
+                for decision, index, value, text in zip(
+                    expr.decisions, expr.indices, declared, texts
+                )
+            )
+            found.setdefault(Read(element.signal, role, (*guards, *selection)))
     else:
         for child in children(expr):
             _collect(child, role, guards, found)
@@ -402,6 +507,8 @@ def to_sv(expr: Expr) -> str:
         return f"{_atom(expr.value)}[{index} {sign} {count}]"
     if isinstance(expr, ArrayElement):
         return f"{_atom(expr.array)}[{to_sv(expr.index)}]"
+    if isinstance(expr, ArrayRead):
+        return expr.name + "".join(f"[{to_sv(index)}]" for index in expr.indices)
     if isinstance(expr, Unary):
         return f"{expr.op.value}{_atom(expr.operand)}"
     if isinstance(expr, Binary):

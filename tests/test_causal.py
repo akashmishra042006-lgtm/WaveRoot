@@ -328,8 +328,10 @@ def dut_provider(**overrides: str) -> MockWaveformProvider:
 _ATOMS = [
     "a", "b", "c", "s", "a[2:1]", "b[3]", "a[k]", "b[k[0] +: 2]", "b[k -: 2]", "c[2 -: 2]",
     "4'd3", "4'b1x0z", "2'sb11", "3'sd2", "$signed(a)", "$unsigned(c)", "{a, s}", "{2{s}}",
-    "1'b1", "8'hf0", "4'sb1001",
+    "1'b1", "8'hf0", "4'sb1001", "m[k]", "m[2]", "m[k ^ 2'd3]",
 ]  # fmt: skip
+_ARRAY = ("m", "logic [3:0]", 4, 4)
+"""An unpacked array operand: name, element type, element width, element count."""
 _BINARY = [
     "+", "-", "*", "/", "%", "&", "|", "^", "~^", "==", "!=", "===", "!==", "==?", "!=?",
     "<", "<=", ">", ">=", "&&", "||", "<<", ">>", "<<<", ">>>", "**", "->", "<->",
@@ -383,29 +385,36 @@ def test_evaluator_agrees_with_slang_constant_evaluation(tmp_path: Path, seed: i
     statements and evaluated by this package. The same expressions, with the
     operands replaced by literals, are evaluated by slang as ``localparam``
     values. Select indices stay known because slang rejects an ``x`` index in a
-    constant expression; that case has its own test below.
+    constant expression; that case has its own test below. The unpacked array
+    ``m`` is read through element signals ``m[0]`` .. ``m[3]``.
     """
     rng = random.Random(seed)
     expressions = [_random_expression(rng, 3) for _ in range(80)]
+    array, element_type, element_width, count = _ARRAY
     ports = ", ".join(f"input {type_} {name}" for name, type_, _, _ in _OPERANDS)
+    ports += f", input {element_type} {array} [{count}]"
     outputs = "".join(f", output logic [7:0] y{i}" for i in range(len(expressions)))
     assigns = "".join(f"  assign y{i} = {text};\n" for i, text in enumerate(expressions))
     design = build(tmp_path, f"module ev({ports}{outputs});\n{assigns}endmodule\n", "ev.sv")
     assert not design.diagnostics, "every generated construct must be supported"
 
+    def random_bits(width: int, known: bool) -> str:
+        return "".join(rng.choice("01" if known or rng.random() < 0.6 else "01xz") for _ in range(width))
+
     checked = 0
     for trial in range(20):
         values = {
-            name: "".join(
-                rng.choice("01" if trial < 5 or name == "k" or rng.random() < 0.6 else "01xz")
-                for _ in range(width)
-            )
+            name: random_bits(width, trial < 5 or name == "k")
             for name, _, width, _ in _OPERANDS
         }
+        elements = [random_bits(element_width, trial < 5) for _ in range(count)]
+        values.update({f"{array}[{index}]": bits for index, bits in enumerate(elements)})
         params = "".join(
             f"  localparam {type_} {name} = {width}'{sign}b{values[name]};\n"
             for name, type_, width, sign in _OPERANDS
         )
+        pattern = ", ".join(f"{element_width}'b{bits}" for bits in elements)
+        params += f"  localparam {element_type} {array} [{count}] = '{{{pattern}}};\n"
         results = "".join(
             f"  localparam logic [7:0] y{i} = {text};\n" for i, text in enumerate(expressions)
         )
@@ -488,7 +497,16 @@ def test_fifo_signals_carry_widths_ranges_and_declaration_lines(fifo_design: Des
     )
     assert wptr.span is not None and wptr.span.line == 16
     assert signals["in_data"].bit_range == BitRange(left=7, right=0)
-    assert signals["mem"].is_aggregate
+    # `logic [7:0] mem [4]` is declared element by element.
+    assert "mem" not in signals
+    for index in range(4):
+        element = signals[f"mem[{index}]"]
+        assert (element.width, element.bit_range, element.is_aggregate) == (
+            8,
+            BitRange(left=7, right=0),
+            False,
+        )
+        assert element.span is not None and element.span.line == 18
 
 
 def test_fifo_register_driver_records_clock_guards_and_exact_lines(
@@ -532,14 +550,17 @@ def test_fifo_structural_edges_label_type_and_role(fifo_design: DesignGraph) -> 
     }
     # The array read index and the array write index are selectors, not data.
     assert labels("rptr", "out_data") == {(EdgeType.COMBINATIONAL, EdgeRole.CONTROL)}
-    assert labels("wptr", "mem") == {(EdgeType.SEQUENTIAL, EdgeRole.CONTROL)}
-    assert labels("in_data", "mem") == {(EdgeType.SEQUENTIAL, EdgeRole.DATA)}
+    elements = [f"mem[{index}]" for index in range(4)]
+    for element in elements:
+        assert labels(element, "out_data") == {(EdgeType.COMBINATIONAL, EdgeRole.DATA)}
+        assert labels("wptr", element) == {(EdgeType.SEQUENTIAL, EdgeRole.CONTROL)}
+        assert labels("in_data", element) == {(EdgeType.SEQUENTIAL, EdgeRole.DATA)}
     assert labels("clk", "wptr") == set()
 
     sequential_targets = {
         edge.target for edge in fifo_design.edges if edge.edge_type is EdgeType.SEQUENTIAL
     }
-    assert sequential_targets == {"wptr", "rptr", "mem"}
+    assert sequential_targets == {"wptr", "rptr", *elements}
     wrap_data = [
         edge
         for edge in fifo_design.fanin("wptr")
@@ -851,22 +872,237 @@ def test_fifo_waveform_window_covers_the_slice(fifo_report: CausalReport) -> Non
     assert paths[0] == "tb.dut.clk" and "tb.dut.wptr" in paths and "tb.dut.mem" not in paths
 
 
-def test_unobserved_array_is_reported_and_its_writes_are_kept(
-    fifo_provider: MockWaveformProvider, fifo_design: DesignGraph
+# --------------------------------------------------------------------------
+# Unpacked arrays (B-02)
+# --------------------------------------------------------------------------
+
+# The fifth write, at cycle 4, wraps to mem[0] and overwrites the first word.
+OUT_DATA_FAILURE = failure_at("out_data", 4, 65000, actual="01010101", expected="00010001")
+
+
+def with_memory(trace: MockTrace) -> MockWaveformProvider:
+    """The mock FIFO trace extended, in this test only, with ``tb.dut.mem[0..3]``.
+
+    The values follow the RTL: each push stores ``in_data`` in
+    ``mem[wptr[1:0]]``. The shared fixture is not changed.
+    """
+    words = {
+        0: [(0, "xxxxxxxx"), (25000, "00010001"), (65000, "01010101")],
+        1: [(0, "xxxxxxxx"), (35000, "00100010")],
+        2: [(0, "xxxxxxxx"), (45000, "00110011")],
+        3: [(0, "xxxxxxxx"), (55000, "01000100")],
+    }
+    memory = tuple(
+        MockSignal(
+            decl=SignalDecl(path=f"{SCOPE}.mem[{index}]", width=8, bit_range=BitRange(left=7, right=0)),
+            samples=tuple(SignalSample(time_ps=time, value=lv(bits)) for time, bits in samples),
+        )
+        for index, samples in words.items()
+    )
+    return MockWaveformProvider(
+        MockTrace(
+            coverage=trace.coverage,
+            unavailable=trace.unavailable,
+            signals=(*trace.signals, *memory),
+        )
+    )
+
+
+def edge_structure(report: CausalReport) -> set[tuple[object, ...]]:
+    """Edges by signal and observation, ignoring node ids, values, and reasons."""
+    where = {n.id: (n.signal_path, n.observation.cycle, n.observation.phase) for n in report.nodes}
+    return {
+        (where[e.source], where[e.target], e.edge_type, e.role, e.branch) for e in report.edges
+    }
+
+
+def test_indexed_read_keeps_only_the_selected_element_and_reaches_its_write(
+    fifo: MockFixture, fifo_design: DesignGraph
 ) -> None:
-    failure = failure_at("out_data", 4, 65000, actual="01010101", expected="00100010")
-    report = slice_failure(failure, fifo_provider, fifo_design, OPTIONS)
-    assert {"SIGNAL_NOT_OBSERVED", "UNSUPPORTED_OPERAND"} <= codes(report)
-    memory = node_of(report, "mem", 4, SETTLED)
-    assert memory.value is None
-    (read,) = edges_of(report, ("mem", 4, SETTLED), ("out_data", 4, SETTLED))
-    assert (read.role, read.branch) == (EdgeRole.DATA, BranchStatus.RETAINED)
-    (index,) = edges_of(report, ("rptr", 4, SETTLED), ("out_data", 4, SETTLED))
-    assert index.role is EdgeRole.CONTROL
-    # The element written is not resolved, so the write and the hold are both kept.
-    write = edges_of(report, ("in_data", 4, BEFORE), ("mem", 4, SETTLED), EdgeRole.DATA)
-    hold = edges_of(report, ("mem", 4, BEFORE), ("mem", 4, SETTLED), EdgeRole.DATA)
-    assert branches(write) == branches(hold) == {BranchStatus.RETAINED}
+    report = slice_failure(OUT_DATA_FAILURE, with_memory(fifo.trace), fifo_design, OPTIONS)
+    assert not report.truncated and codes(report) == set()
+    assert CausalReport.model_validate_json(report.model_dump_json()) == report
+
+    out = ("out_data", 4, SETTLED)
+    (selected,) = edges_of(report, ("mem[0]", 4, SETTLED), out)
+    assert (selected.role, selected.branch) == (EdgeRole.DATA, BranchStatus.RETAINED)
+    targets = {edge.target for edge in report.edges}
+    for index in (1, 2, 3):
+        (other,) = edges_of(report, (f"mem[{index}]", 4, SETTLED), out)
+        assert other.branch is BranchStatus.PRUNED
+        assert f"the index `rptr[1:0]` is not {index}" in other.reason
+        # An unselected element is shown with its value, but its writes are not explored.
+        unselected = node_of(report, f"mem[{index}]", 4, SETTLED)
+        assert unselected.value is not None and unselected.id not in targets
+
+    # The slice reaches in_data at the cycle whose wptr addressed mem[0].
+    element = ("mem[0]", 4, SETTLED)
+    (write,) = edges_of(report, ("in_data", 4, BEFORE), element)
+    assert (write.edge_type, write.role, write.branch) == (
+        EdgeType.SEQUENTIAL,
+        EdgeRole.DATA,
+        BranchStatus.RETAINED,
+    )
+    assert node_of(report, "in_data", 4, BEFORE).value == lv("01010101")
+    (index,) = edges_of(report, ("wptr", 4, BEFORE), element)
+    assert (index.role, index.branch) == (EdgeRole.CONTROL, BranchStatus.RETAINED)
+    assert "Index `wptr[1:0]` is 2'b00" in index.reason
+    assert node_of(report, "wptr", 4, BEFORE).value == lv("000")
+    # A definite write has no hold edge, so mem[0] before the edge is not in the graph.
+    assert not [
+        node
+        for node in report.nodes
+        if node.signal_path == "tb.dut.mem[0]" and node.observation.phase is BEFORE
+    ]
+
+    top = report.suspects[0]
+    assert top.node_id == node_of(report, "mem[0]", 4, SETTLED).id
+    assert top.location is not None and top.location.line == 36
+    assert "changed tb.dut.mem[0] from 8'b00010001 to 8'b01010101" in top.reason
+    # The wrap assignment that sent the write to mem[0] is among the suspects.
+    assert any(s.location is not None and s.location.line == 38 for s in report.suspects)
+
+
+def test_elements_missing_from_the_trace_are_reported_and_prune_nothing(
+    fifo: MockFixture, fifo_provider: MockWaveformProvider, fifo_design: DesignGraph
+) -> None:
+    missing = slice_failure(OUT_DATA_FAILURE, fifo_provider, fifo_design, OPTIONS)
+    observed = slice_failure(OUT_DATA_FAILURE, with_memory(fifo.trace), fifo_design, OPTIONS)
+    # The candidate assertion cannot constrain an element it has no value for.
+    assert codes(missing) == {"SIGNAL_NOT_OBSERVED", "SVA_OPERAND_NOT_OBSERVED"}
+    messages = [d.message for d in missing.diagnostics if d.code == "SIGNAL_NOT_OBSERVED"]
+    assert any("tb.dut.mem[0]" in message for message in messages)
+    assert node_of(missing, "mem[0]", 4, SETTLED).value is None
+    # Element values never decide anything here, so the graph is the same either way.
+    assert edge_structure(missing) == edge_structure(observed)
+    assert CausalReport.model_validate_json(missing.model_dump_json()) == missing
+
+
+ARRAY_SV = """\
+module rd (input logic clk, input logic we, input logic [1:0] w, k,
+           input logic [3:0] d, output logic [3:0] y);
+  logic [3:0] mem [4];
+  always_ff @(posedge clk) if (we) mem[w] <= d;
+  assign y = mem[k];
+endmodule
+"""
+
+ARRAY_VALUES = {
+    "we": "1", "w": "10", "k": "01", "d": "0110", "y": "0011",
+    "mem[0]": "0001", "mem[1]": "0011", "mem[2]": "0110", "mem[3]": "1111",
+}  # fmt: skip
+
+
+def test_unknown_read_index_keeps_every_element_as_unknown(tmp_path: Path) -> None:
+    design = build(tmp_path, ARRAY_SV)
+    provider = static_provider({**ARRAY_VALUES, "k": "x1", "y": "xxxx"})
+    report = slice_failure(
+        failure_at("y", 2, 25000, actual="xxxx", expected="0011"), provider, design, OPTIONS
+    )
+    y = ("y", 2, SETTLED)
+    for index in range(4):
+        (read,) = edges_of(report, (f"mem[{index}]", 2, SETTLED), y)
+        assert read.branch is BranchStatus.UNKNOWN and "every element is kept" in read.reason
+    (selector,) = edges_of(report, ("k", 2, SETTLED), y)
+    assert selector.role is EdgeRole.CONTROL
+    y_id = node_of(report, *y).id
+    assert not any(e.branch is BranchStatus.PRUNED for e in report.edges if e.target == y_id)
+    assert CausalReport.model_validate_json(report.model_dump_json()) == report
+
+
+def test_unknown_write_index_keeps_the_write_and_the_hold_of_every_element(
+    tmp_path: Path,
+) -> None:
+    design = build(tmp_path, ARRAY_SV)
+    provider = static_provider({**ARRAY_VALUES, "w": "x0", "k": "xx", "y": "xxxx"})
+    report = slice_failure(
+        failure_at("y", 2, 25000, actual="xxxx", expected="0011"), provider, design, OPTIONS
+    )
+    for index in range(4):
+        element = (f"mem[{index}]", 2, SETTLED)
+        (write,) = edges_of(report, ("d", 2, BEFORE), element)
+        (hold,) = edges_of(report, (f"mem[{index}]", 2, BEFORE), element)
+        assert write.branch is hold.branch is BranchStatus.UNKNOWN
+        assert "may hold" in hold.reason
+        (selector,) = edges_of(report, ("w", 2, BEFORE), element)
+        assert (selector.role, selector.branch) == (EdgeRole.CONTROL, BranchStatus.UNKNOWN)
+    assert CausalReport.model_validate_json(report.model_dump_json()) == report
+
+
+def test_array_reads_and_writes_lower_to_element_signals(tmp_path: Path) -> None:
+    design = build(
+        tmp_path,
+        "module arr (input logic clk, input logic [1:0] i, j, input logic [3:0] d,\n"
+        "            output logic [3:0] y, g, t, c);\n"
+        "  logic [3:0] mem [3];\n"
+        "  logic [3:0] grid [2][3];\n"
+        "  logic [3:0] down [7:4];\n"
+        "  always_ff @(posedge clk) begin\n"
+        "    mem[i] <= d;\n"
+        "    grid[i[0]][j] <= d;\n"
+        "    down[5] <= d;\n"
+        "  end\n"
+        "  assign y = mem[i];\n"
+        "  assign g = grid[1][j];\n"
+        "  assign t = down[i + 4];\n"
+        "  assign c = down[6];\n"
+        "endmodule\n",
+    )
+    assert not design.diagnostics
+    names = set(design.signals)
+    assert {"mem[0]", "mem[1]", "mem[2]", "down[7]", "down[4]", "grid[1][2]"} <= names
+    assert not {"mem", "grid", "down", "mem[3]"} & names
+
+    def value(signal: str, **operands: str) -> str:
+        rhs = design.drivers[signal][0].assigns[0].rhs
+        values = {f"mem[{n}]": f"{n:04b}" for n in range(3)}
+        values.update({f"grid[{a}][{b}]": f"1{a}{b % 2}{b // 2}" for a in range(2) for b in range(3)})
+        values.update({f"down[{n}]": f"{n:04b}" for n in range(4, 8)})
+        values.update({name: bits for name, bits in operands.items()})
+        return ir.evaluate(rhs, lambda signal: Vec(values[signal]) if signal in values else None).bits
+
+    assert value("y", i="01") == "0001"
+    assert value("y", i="11") == "xxxx", "an out-of-range index reads x"
+    assert value("y", i="x0") == "xxxx", "an unknown index reads x"
+    assert value("g", j="10") == "1101"
+    assert value("t", i="01") == "0101"
+    assert isinstance(design.drivers["c"][0].assigns[0].rhs, ir.SignalRef)
+    assert value("c") == "0110"
+
+    # A run-time index makes every element a target under an index guard.
+    for n in range(3):
+        (driver,) = design.drivers[f"mem[{n}]"]
+        (assign,) = driver.assigns
+        assert assign.full_write and assign.index_operands == ()
+        assert [ir.describe_guard(guard) for guard in assign.guards] == [f"i == {n}"]
+    (cell,) = design.drivers["grid[0][2]"][0].assigns
+    assert [ir.describe_guard(guard) for guard in cell.guards] == ["i[0] == 0", "j == 2"]
+    # A constant index writes one element with no guard.
+    (fixed,) = design.drivers["down[5]"][0].assigns
+    assert fixed.full_write and fixed.guards == ()
+    assert "down[4]" not in design.drivers and "down[6]" not in design.drivers
+
+
+def test_array_beyond_the_element_limit_stays_aggregate(tmp_path: Path) -> None:
+    design = build(
+        tmp_path,
+        "module big (input logic clk, input logic [12:0] a, input logic [7:0] d,\n"
+        "            output logic [7:0] y, z);\n"
+        "  logic [7:0] mem [5000];\n"
+        "  logic [7:0] neg [-2:1];\n"
+        "  always_ff @(posedge clk) mem[a] <= d;\n"
+        "  assign y = mem[a];\n"
+        "  assign z = neg[0];\n"
+        "endmodule\n",
+    )
+    messages = [d.message for d in design.diagnostics if d.code == "ARRAY_NOT_EXPANDED"]
+    assert len(messages) == 2
+    assert any("5000 elements, more than the limit of 4096" in m for m in messages)
+    assert any("negative index" in m for m in messages)
+    assert design.signals["mem"].is_aggregate and "mem[0]" not in design.signals
+    assert isinstance(design.drivers["y"][0].assigns[0].rhs, ir.ArrayElement)
+    (write,) = design.drivers["mem"][0].assigns
+    assert not write.full_write, "a write into an aggregate array is partial"
 
 
 def test_expand_holds_steps_back_one_cycle_at_a_time(

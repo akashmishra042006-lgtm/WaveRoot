@@ -35,12 +35,14 @@ the slicer can report where its result is incomplete.
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from types import MappingProxyType
+from typing import Final
 
 import pyslang
 from pyslang import ast, syntax
@@ -323,15 +325,55 @@ _DIRECTIONS: dict[ast.ArgumentDirection, SignalKind] = {
 _EDGE_KINDS = (ast.EdgeKind.PosEdge, ast.EdgeKind.NegEdge, ast.EdgeKind.BothEdges)
 
 
+MAX_ARRAY_ELEMENTS: Final = 4096
+"""Unpacked arrays with more elements than this stay one aggregate signal."""
+
+
+@dataclass(frozen=True, slots=True)
+class _ArrayLayout:
+    """A fixed-size unpacked array of integral elements, declared element by element."""
+
+    name: str
+    ranges: tuple[tuple[int, int], ...]
+    width: int
+    signed: bool
+    elements: tuple[str, ...]
+
+    def element(self, indices: Sequence[int]) -> str | None:
+        """The element signal at declared ``indices``, or None if out of range."""
+        if len(indices) != len(self.ranges):
+            return None
+        for index, (left, right) in zip(indices, self.ranges):
+            if not min(left, right) <= index <= max(left, right):
+                return None
+        return self.name + "".join(f"[{index}]" for index in indices)
+
+
+@dataclass(frozen=True, slots=True)
+class _Root:
+    """A signal an lvalue writes, and the element selection that must hold."""
+
+    signal: str
+    full_write: bool
+    index_operands: tuple[ir.Expr, ...]
+    guards: tuple[ir.Guard, ...]
+
+
 @dataclass(frozen=True, slots=True)
 class _Target:
-    """One signal written by an assignment and the slice of the RHS it takes."""
+    """One signal written by an assignment and the slice of the RHS it takes.
+
+    ``guards`` are ``index`` guards: an element of an unpacked array written
+    through a run-time index is a separate target, written only when the
+    index selects it.
+    """
 
     signal: str
     full_write: bool
     index_operands: tuple[ir.Expr, ...]
     rhs_offset: int
     width: int
+    guards: tuple[ir.Guard, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -352,6 +394,33 @@ def _integral(type_: ast.Type) -> tuple[int, bool] | None:
     if not canonical.isIntegral or canonical.bitWidth < 1:
         return None
     return canonical.bitWidth, canonical.isSigned
+
+
+def _packed(canonical: ast.Type) -> tuple[int, BitRange | None, bool] | None:
+    """Width, declared range, and signedness of an integral type, or None."""
+    if not canonical.isIntegral or canonical.bitWidth < 1:
+        return None
+    width = canonical.bitWidth
+    bit_range: BitRange | None
+    if canonical.isScalar:
+        bit_range = None
+    else:
+        declared = canonical.fixedRange
+        simple = canonical.isSimpleBitVector and min(declared.left, declared.right) >= 0
+        if simple and abs(declared.left - declared.right) + 1 == width:
+            bit_range = BitRange(left=declared.left, right=declared.right)
+        else:
+            bit_range = BitRange(left=width - 1, right=0)
+    return width, bit_range, canonical.isSigned
+
+
+def _signal_refs(expr: ir.Expr) -> tuple[ir.SignalRef, ...]:
+    """Signals a lowered name stands for: itself, or every element of an array."""
+    if isinstance(expr, ir.SignalRef):
+        return (expr,)
+    if isinstance(expr, ir.Unsupported):
+        return tuple(operand for operand in expr.operands if isinstance(operand, ir.SignalRef))
+    return ()
 
 
 def _const_int(expr: ir.Expr) -> int | None:
@@ -377,6 +446,7 @@ class _Lowerer:
         self._signals: dict[str, SignalInfo] = {}
         self._drivers: dict[str, list[Driver]] = {}
         self._aliases: dict[str, str] = {}
+        self._arrays: dict[str, _ArrayLayout] = {}
         self._diagnostics: dict[Diagnostic, None] = {}
         self._texts: dict[str, str] = {}
         self._decisions = 0
@@ -452,30 +522,73 @@ class _Lowerer:
     ) -> None:
         canonical = symbol.type.canonicalType
         span = self._line_span(symbol.location)
-        if canonical.isIntegral and canonical.bitWidth >= 1:
-            width = canonical.bitWidth
-            bit_range: BitRange | None
-            if canonical.isScalar:
-                bit_range = None
-            else:
-                declared = canonical.fixedRange
-                simple = canonical.isSimpleBitVector and min(declared.left, declared.right) >= 0
-                if simple and abs(declared.left - declared.right) + 1 == width:
-                    bit_range = BitRange(left=declared.left, right=declared.right)
-                else:
-                    bit_range = BitRange(left=width - 1, right=0)
-            info = SignalInfo(name, width, bit_range, canonical.isSigned, kind, span)
-        else:
+        if canonical.isUnpackedArray and self._declare_array(symbol, name, kind, span):
+            return
+        packed = _packed(canonical)
+        if packed is not None:
+            width, bit_range, signed = packed
+            self._signals[name] = SignalInfo(name, width, bit_range, signed, kind, span)
+            return
+        self._diag(
+            "UNSUPPORTED_SIGNAL_TYPE",
+            f"{name} has type {symbol.type} at {self._where(symbol.location)}; "
+            "its value is not reconstructed and reads of it stay unknown.",
+        )
+        self._declare_aggregate(name, canonical, kind, span)
+
+    def _declare_aggregate(
+        self, name: str, canonical: ast.Type, kind: SignalKind, span: SourceSpan | None
+    ) -> None:
+        width = max(1, canonical.bitstreamWidth)
+        self._signals[name] = SignalInfo(
+            name, width, BitRange(left=width - 1, right=0), False, kind, span, True
+        )
+
+    def _declare_array(
+        self,
+        symbol: ast.VariableSymbol | ast.NetSymbol,
+        name: str,
+        kind: SignalKind,
+        span: SourceSpan | None,
+    ) -> bool:
+        """Declare one signal per element, named ``mem[0]``; False if not possible.
+
+        False leaves the declaration to the caller, which reports the type. An
+        array that has integral elements but cannot be expanded is declared
+        here as one aggregate signal, with a diagnostic saying why.
+        """
+        ranges: list[tuple[int, int]] = []
+        current = symbol.type.canonicalType
+        while current.isUnpackedArray and current.isFixedSize:
+            declared = current.fixedRange
+            ranges.append((declared.left, declared.right))
+            current = current.arrayElementType.canonicalType
+        packed = None if current.isUnpackedArray else _packed(current)
+        if packed is None:
+            return False
+        count = math.prod(ir.dimension_size(bounds) for bounds in ranges)
+        reason = None
+        if any(min(bounds) < 0 for bounds in ranges):
+            reason = "a negative index cannot be named in a signal path"
+        elif count > MAX_ARRAY_ELEMENTS:
+            reason = f"it has {count} elements, more than the limit of {MAX_ARRAY_ELEMENTS}"
+        if reason is not None:
             self._diag(
-                "UNSUPPORTED_SIGNAL_TYPE",
-                f"{name} has type {symbol.type} at {self._where(symbol.location)}; "
-                "its value is not reconstructed and reads of it stay unknown.",
+                "ARRAY_NOT_EXPANDED",
+                f"{name} at {self._where(symbol.location)} is kept as one aggregate signal "
+                f"because {reason}; reads of its elements stay unknown and every write to it "
+                "is kept.",
             )
-            width = max(1, canonical.bitstreamWidth)
-            info = SignalInfo(
-                name, width, BitRange(left=width - 1, right=0), False, kind, span, True
-            )
-        self._signals[name] = info
+            self._declare_aggregate(name, symbol.type.canonicalType, kind, span)
+            return True
+        width, bit_range, signed = packed
+        elements: list[str] = []
+        for indices in ir.element_indices(tuple(ranges)):
+            element = name + "".join(f"[{index}]" for index in indices)
+            self._signals[element] = SignalInfo(element, width, bit_range, signed, kind, span)
+            elements.append(element)
+        self._arrays[name] = _ArrayLayout(name, tuple(ranges), width, signed, tuple(elements))
+        return True
 
     def _add_drivers(
         self,
@@ -886,18 +999,22 @@ class _Lowerer:
             return
         if text is None:
             text = self._text(assignment.sourceRange) or f"<assignment> {ir.to_sv(rhs)}"
-        whole = len(targets) == 1 and targets[0].width == rhs.width
         for target in targets:
+            # Element targets of one indexed write are alternatives: each takes the
+            # whole RHS. Targets of a concatenation take consecutive slices of it.
             value = rhs
-            if not whole:
-                label = f"[{rhs.width - target.rhs_offset - 1}-:{target.width}]"
-                value = ir.PartSelect(target.width, False, rhs, target.rhs_offset, label)
+            if target.rhs_offset != 0 or target.width != rhs.width:
+                if isinstance(rhs, ir.Unsupported):
+                    value = ir.Unsupported(target.width, False, rhs.what, rhs.operands)
+                else:
+                    label = f"[{rhs.width - target.rhs_offset - 1}-:{target.width}]"
+                    value = ir.PartSelect(target.width, False, rhs, target.rhs_offset, label)
             out.append(
                 GuardedAssign(
                     target=target.signal,
                     full_write=target.full_write,
                     rhs=value,
-                    guards=guards,
+                    guards=(*guards, *target.guards),
                     index_operands=target.index_operands,
                     blocking=not assignment.isNonBlocking,
                     span=span,
@@ -924,9 +1041,8 @@ class _Lowerer:
             if isinstance(node, ast.AssignmentExpression):
                 assignments.append(node)
             elif isinstance(node, ast.NamedValueExpression):
-                lowered = self._lower_named(node, quiet=True)
-                if isinstance(lowered, ir.SignalRef):
-                    reads.setdefault(lowered.signal, lowered)
+                for ref in _signal_refs(self._lower_named(node, quiet=True)):
+                    reads.setdefault(ref.signal, ref)
 
         statement.visit(visit)
         span = self._span(statement.sourceRange)
@@ -947,7 +1063,7 @@ class _Lowerer:
                         target=target.signal,
                         full_write=False,
                         rhs=ir.Unsupported(target.width, False, f"{what} statement", operands),
-                        guards=(*guards, guard),
+                        guards=(*guards, *target.guards, guard),
                         index_operands=(),
                         blocking=not assignment.isNonBlocking,
                         span=span,
@@ -975,24 +1091,44 @@ class _Lowerer:
                             target.index_operands,
                             offset + target.rhs_offset,
                             target.width,
+                            target.guards,
                         )
                     )
                 offset += width
             return found
-        root = self._lvalue_root(lvalue)
-        if root is None:
+        roots = self._lvalue_roots(lvalue)
+        if roots is None:
             return None
-        signal, full_write, index_operands = root
-        info = self._signals[signal]
-        width = info.width if full_write else max(1, lvalue.type.bitstreamWidth)
-        return [_Target(signal, full_write, index_operands, 0, width)]
+        lvalue_type = lvalue.type.canonicalType
+        partial = max(1, lvalue_type.bitstreamWidth) if lvalue_type.isIntegral else None
+        found = []
+        for root in roots:
+            info = self._signals[root.signal]
+            width = info.width if root.full_write or partial is None else partial
+            found.append(
+                _Target(root.signal, root.full_write, root.index_operands, 0, width, root.guards)
+            )
+        return found
 
-    def _lvalue_root(
-        self, lvalue: ast.Expression
-    ) -> tuple[str, bool, tuple[ir.Expr, ...]] | None:
+    def _lvalue_roots(self, lvalue: ast.Expression) -> list[_Root] | None:
+        """Signals ``lvalue`` writes; None if it cannot be resolved."""
+        access = self._array_access(lvalue)
+        if access is not None:
+            return self._element_roots(lvalue, *access)
+        where = self._where(lvalue.sourceRange.start)
         if isinstance(lvalue, ast.NamedValueExpression):
             name = self._local_name(lvalue.symbol)
-            return (name, True, ()) if name is not None else None
+            if name is not None:
+                return [_Root(name, True, (), ())]
+            layout = self._arrays.get(self._relative(lvalue.symbol) or "")
+            if layout is None:
+                return None
+            self._diag(
+                "UNSUPPORTED_ARRAY_ACCESS",
+                f"Assignment to the whole array {layout.name} at {where} is not modeled element "
+                "by element; every element keeps it as a partial write of unknown value.",
+            )
+            return [_Root(element, False, (), ()) for element in layout.elements]
         if isinstance(lvalue, ast.ElementSelectExpression):
             selectors: tuple[ast.Expression, ...] = (lvalue.selector,)
         elif isinstance(lvalue, ast.RangeSelectExpression):
@@ -1001,16 +1137,98 @@ class _Lowerer:
             selectors = ()
         else:
             return None
-        inner = self._lvalue_root(lvalue.value)
+        inner = self._lvalue_roots(lvalue.value)
         if inner is None:
             return None
-        signal, _, index_operands = inner
+        if lvalue.value.type.canonicalType.isUnpackedArray:
+            self._diag(
+                "UNSUPPORTED_ARRAY_ACCESS",
+                f"Assignment to a slice of an unpacked array at {where} is not modeled element by "
+                "element; every element it may touch keeps it as a partial write.",
+            )
         dynamic = tuple(
             lowered
             for lowered in (self._lower(selector) for selector in selectors)
             if not isinstance(lowered, ir.Const)
         )
-        return signal, False, (*index_operands, *dynamic)
+        return [
+            _Root(root.signal, False, (*root.index_operands, *dynamic), root.guards)
+            for root in inner
+        ]
+
+    def _element_roots(
+        self, lvalue: ast.Expression, layout: _ArrayLayout, selectors: Sequence[ast.Expression]
+    ) -> list[_Root]:
+        """Elements an indexed array write may store to, each under its ``index`` guards.
+
+        A constant index selects its element directly. A run-time index makes
+        every element a target, written only when the index equals its declared
+        index. Selecting fewer dimensions than declared writes a sub-array; its
+        elements keep the write as a partial one.
+        """
+        lowered = [self._lower(selector) for selector in selectors]
+        full = len(lowered) == len(layout.ranges)
+        if not full:
+            self._diag(
+                "UNSUPPORTED_ARRAY_ACCESS",
+                f"Assignment to a sub-array of {layout.name} at "
+                f"{self._where(lvalue.sourceRange.start)} is not modeled element by element; "
+                "every element it may touch keeps it as a partial write.",
+            )
+        decisions = [self._next_decision() for _ in lowered]
+        roots: list[_Root] = []
+        for indices, element in zip(ir.element_indices(layout.ranges), layout.elements):
+            guards: list[ir.Guard] = []
+            for dimension, selector in enumerate(lowered):
+                if isinstance(selector, ir.Const):
+                    if _const_int(selector) != indices[dimension]:
+                        break
+                    continue
+                source = selectors[dimension].sourceRange
+                guards.append(
+                    ir.index_guard(
+                        decisions[dimension],
+                        selector,
+                        indices[dimension],
+                        self._text(source) or None,
+                        self._span(source),
+                    )
+                )
+            else:
+                roots.append(_Root(element, full, (), tuple(guards)))
+        if not roots:
+            self._diag(
+                "ARRAY_INDEX_OUT_OF_RANGE",
+                f"Assignment to {layout.name} at {self._where(lvalue.sourceRange.start)} has a "
+                "constant index that is unknown or outside the declared range; it writes no "
+                "element (IEEE 1800 section 7.4.6).",
+            )
+        return roots
+
+    def _array_access(
+        self, expression: ast.Expression
+    ) -> tuple[_ArrayLayout, list[ast.Expression]] | None:
+        """The expanded array and the index expressions of an element select chain."""
+        selectors: list[ast.Expression] = []
+        current = expression
+        while (
+            isinstance(current, ast.ElementSelectExpression)
+            and current.value.type.canonicalType.isUnpackedArray
+        ):
+            selectors.append(current.selector)
+            current = current.value
+        if not selectors or not isinstance(current, ast.NamedValueExpression):
+            return None
+        layout = self._arrays.get(self._relative(current.symbol) or "")
+        if layout is None:
+            return None
+        selectors.reverse()
+        return layout, selectors
+
+    def _relative(self, symbol: ast.Symbol) -> str | None:
+        """Path of ``symbol`` relative to the top instance, or None outside it."""
+        path = symbol.hierarchicalPath
+        return path[len(self._prefix) :] if path.startswith(self._prefix) else None
 
     def _local_name(self, symbol: ast.Symbol) -> str | None:
         """Path of a declared signal relative to the top instance, or None.
@@ -1018,11 +1236,8 @@ class _Lowerer:
         Every instance has its own elaborated body, so ``hierarchicalPath``
         tells two instances of one module apart.
         """
-        path = symbol.hierarchicalPath
-        if not path.startswith(self._prefix):
-            return None
-        name = path[len(self._prefix) :]
-        return name if name in self._signals else None
+        name = self._relative(symbol)
+        return name if name is not None and name in self._signals else None
 
     # ---- expressions ----------------------------------------------------
 
@@ -1121,6 +1336,19 @@ class _Lowerer:
                 return ir.SignalRef(info[0], info[1], name)
             return ir.SignalRef(declared.width, False, name)
         width, signed = info if info is not None else (1, False)
+        layout = self._arrays.get(self._relative(symbol) or "")
+        if layout is not None:
+            what = f"whole-array reference to {layout.name}"
+            if not quiet:
+                self._diag(
+                    "UNSUPPORTED_EXPRESSION",
+                    f"{what} at {self._where(expression.sourceRange.start)} is not evaluated "
+                    "element by element; its value is unknown and every element is kept.",
+                )
+            elements = tuple(
+                ir.SignalRef(layout.width, layout.signed, element) for element in layout.elements
+            )
+            return ir.Unsupported(width, signed, what, elements)
         what = f"reference to {symbol.kind.name} {symbol.name}"
         if not quiet:
             self._diag(
@@ -1150,12 +1378,17 @@ class _Lowerer:
         self, expression: ast.ElementSelectExpression, width: int, signed: bool
     ) -> ir.Expr:
         container = expression.value.type.canonicalType
+        if container.isUnpackedArray:
+            access = self._array_access(expression)
+            if access is not None:
+                return self._lower_array_read(expression, *access, width, signed)
+            # An array kept as one aggregate signal.
+            value = self._lower(expression.value)
+            return ir.ArrayElement(width, signed, value, self._lower(expression.selector))
+        if not container.isIntegral:
+            return self._unsupported(expression, "element select", width, signed)
         value = self._lower(expression.value)
         index = self._lower(expression.selector)
-        if not container.isIntegral:
-            if container.isUnpackedArray:
-                return ir.ArrayElement(width, signed, value, index)
-            return self._unsupported(expression, "element select", width, signed)
         declared = container.fixedRange
         left, right = declared.left, declared.right
         constant = _const_int(index)
@@ -1167,6 +1400,33 @@ class _Lowerer:
         if not 0 <= position <= abs(left - right):
             return ir.Const(width, signed, "x" * width)
         return ir.PartSelect(width, signed, value, position * width, f"[{constant}]")
+
+    def _lower_array_read(
+        self,
+        expression: ast.ElementSelectExpression,
+        layout: _ArrayLayout,
+        selectors: Sequence[ast.Expression],
+        width: int,
+        signed: bool,
+    ) -> ir.Expr:
+        if len(selectors) != len(layout.ranges):
+            return self._unsupported(expression, "sub-array select", width, signed)
+        indices = tuple(self._lower(selector) for selector in selectors)
+        if all(isinstance(index, ir.Const) for index in indices):
+            values = [_const_int(index) for index in indices]
+            known = [value for value in values if value is not None]
+            element = layout.element(known) if len(known) == len(values) else None
+            if element is None:
+                # IEEE 1800 7.4.6: an unknown or out-of-range index reads all-x.
+                return ir.Const(width, signed, "x" * width)
+            return ir.SignalRef(width, signed, element)
+        elements = tuple(
+            ir.SignalRef(layout.width, layout.signed, element) for element in layout.elements
+        )
+        decisions = tuple(self._next_decision() for _ in indices)
+        return ir.ArrayRead(
+            width, signed, layout.name, elements, indices, layout.ranges, decisions
+        )
 
     def _lower_range_select(
         self, expression: ast.RangeSelectExpression, width: int, signed: bool
@@ -1218,9 +1478,8 @@ class _Lowerer:
 
         def visit(node: object) -> None:
             if isinstance(node, ast.NamedValueExpression):
-                lowered = self._lower_named(node, quiet=True)
-                if isinstance(lowered, ir.SignalRef):
-                    operands.setdefault(lowered.signal, lowered)
+                for ref in _signal_refs(self._lower_named(node, quiet=True)):
+                    operands.setdefault(ref.signal, ref)
 
         expression.visit(visit)
         self._diag(

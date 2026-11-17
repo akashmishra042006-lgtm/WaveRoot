@@ -615,17 +615,11 @@ class _Slicer:
                         outcome = ir.evaluate_guard(guard, lookup)
                         if outcome is Tri.FALSE:
                             status = BranchStatus.PRUNED
-                            reason = (
-                                f"`?:` arm of `{assign.text}` is not selected: "
-                                f"{ir.describe_guard(guard)} is false {when}."
-                            )
+                            reason = self._unselected(guard, assign, read.signal, when)
                             break
                         if outcome is Tri.UNKNOWN:
                             status = BranchStatus.UNKNOWN
-                            reason = (
-                                f"`?:` selection in `{assign.text}` is unknown: `{guard.text}` "
-                                f"is unknown {when}."
-                            )
+                            reason = self._unresolved(guard, assign, when)
                 self._add_edge(
                     (read.signal, cycle, phase), key, edge_type, read.role, status, reason
                 )
@@ -704,13 +698,39 @@ class _Slicer:
             )
         self._classify(node, driver, live, outcomes)
 
+    def _unselected(
+        self, guard: ir.Guard, assign: GuardedAssign, signal: str, when: str
+    ) -> str:
+        """Why a read inside ``assign`` is not selected."""
+        if guard.kind is ir.GuardKind.INDEX:
+            return (
+                f"`{assign.text}` does not read {self._trace_path(signal)}: the index "
+                f"`{guard.text}` is not {guard.element} {when}."
+            )
+        return (
+            f"`?:` arm of `{assign.text}` is not selected: {ir.describe_guard(guard)} is false "
+            f"{when}."
+        )
+
+    @staticmethod
+    def _unresolved(guard: ir.Guard, assign: GuardedAssign, when: str) -> str:
+        """Why the selection of a read inside ``assign`` is unknown."""
+        if guard.kind is ir.GuardKind.INDEX:
+            return (
+                f"The element `{assign.text}` reads is unknown: the index `{guard.text}` is "
+                f"unknown {when}, so every element is kept."
+            )
+        return f"`?:` selection in `{assign.text}` is unknown: `{guard.text}` is unknown {when}."
+
     def _judge_decision(
         self, decision: _Decision, signal: str, lookup: ir.Lookup, when: str
     ) -> tuple[BranchStatus, str]:
-        """Status of the control dependence on one ``if`` or ``case`` construct."""
+        """Status of the control dependence on one ``if``, ``case``, or index selection."""
         guard = decision.guard
         is_case = guard.kind in (ir.GuardKind.CASE_ITEM, ir.GuardKind.CASE_DEFAULT)
         label = "Case selector" if is_case else "Condition"
+        if guard.kind is ir.GuardKind.INDEX:
+            label = "Index"
         enclosing = fs.tri_and(*decision.prefix)
         if enclosing is Tri.FALSE:
             outer = decision.prefix_guards[decision.prefix.index(Tri.FALSE)]

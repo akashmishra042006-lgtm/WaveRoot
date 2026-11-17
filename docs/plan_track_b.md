@@ -25,7 +25,18 @@ resolved through plain port connections); `assign`; net declaration
 assignments; `always_comb`; `always @*`; `always_ff` and
 `always @(posedge clk)` with one clock; `if`; `case`, `casez`, `casex`; `?:`;
 packed vectors; constant and indexed part-selects; packed struct field reads;
-parameters and enum values; concatenated assignment targets.
+parameters and enum values; concatenated assignment targets; fixed-size
+unpacked arrays of integral elements, up to 4096 elements (B-02; one signal per
+element, `mem[2]` or `grid[1][0]`, reads and writes selected by `index`
+guards).
+
+B-02 deviates from its ticket in one place. The ticket asked for an unknown
+read index to give the bitwise merge of all elements. IEEE 1800 section 7.4.6
+says an index with an `x`/`z` bit or out of range reads all-`x`, and a merge
+could claim known bits the simulator never produces, which could then prune a
+branch the simulator took. `ArrayRead` therefore evaluates such a read to
+all-`x`. Pruning is unaffected: an unknown index keeps every element through
+its `index` guards.
 
 Reported but not traversed (the slice stops there and sets `truncated`):
 `inout`, `ref`, and interface ports; unconnected input ports; instance arrays
@@ -35,7 +46,10 @@ internal signals.
 
 Kept as unknown dependencies (every operand is retained, nothing is
 evaluated): loops and other unmodeled statements, `inside`, function calls
-other than `$signed` and `$unsigned`, unpacked arrays, unpacked structs.
+other than `$signed` and `$unsigned`; whole-array copies, array slices,
+sub-arrays, and assignment patterns; arrays above the element cap or with
+negative indices (one aggregate signal, `ARRAY_NOT_EXPANDED`); unpacked
+structs.
 
 ### 1.1 How the slicer treats time
 
