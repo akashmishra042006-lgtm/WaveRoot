@@ -92,6 +92,11 @@ _PATH_COMPONENT: Final = r"[A-Za-z_][A-Za-z0-9_$]*(\[[0-9]+\])*"
 _SIGNAL_PATH_RE: Final = re.compile(rf"{_PATH_COMPONENT}(\.{_PATH_COMPONENT})*")
 _BINARY_RE: Final = re.compile(r"[01]+")
 
+MAX_TIME_PS: Final = 2**128 - 1
+"""Largest legal timestamp (spec section 4). Every 64-bit tick count at every
+legal timescale fits; a trace with a larger timestamp is ``unsupported``."""
+_MAX_TIME_DIGITS: Final = len(str(MAX_TIME_PS))  # 39
+
 
 def _parse_time_ps(value: object) -> object:
     if isinstance(value, bool):
@@ -99,6 +104,10 @@ def _parse_time_ps(value: object) -> object:
     if isinstance(value, int):
         return value
     if isinstance(value, str):
+        # Checked before int() so an absurdly long string never reaches the
+        # interpreter's integer-conversion limit (spec section 11).
+        if len(value) > _MAX_TIME_DIGITS:
+            raise ValueError(f"timestamp string must have at most {_MAX_TIME_DIGITS} digits")
         if _DECIMAL_RE.fullmatch(value):
             return int(value)
         raise ValueError("timestamp string must be a canonical non-negative decimal")
@@ -138,10 +147,10 @@ def _lowercase(value: object) -> object:
 TimePs = Annotated[
     int,
     BeforeValidator(_parse_time_ps),
-    Field(ge=0),
+    Field(ge=0, le=MAX_TIME_PS),
     PlainSerializer(_time_to_json, return_type=str, when_used="json"),
 ]
-"""Integer picoseconds; JSON form is a canonical decimal string."""
+"""Integer picoseconds in ``[0, MAX_TIME_PS]``; JSON form is a canonical decimal string."""
 
 Count = Annotated[int, Field(strict=True, ge=0)]
 PositiveInt = Annotated[int, Field(strict=True, ge=1)]
@@ -366,6 +375,9 @@ class TraceCoverage(ContractModel):
     def _check_order(self) -> Self:
         if self.start_ps > self.end_ps:
             raise ValueError("coverage requires start_ps <= end_ps")
+        if self.end_ps >= MAX_TIME_PS:
+            # Keeps the exclusive end of a whole-trace interval representable.
+            raise ValueError("coverage end_ps must be less than MAX_TIME_PS")
         return self
 
 
@@ -1017,7 +1029,9 @@ class MockTrace(ContractModel):
 
     One final value per signal per timestamp. Samples ascend strictly, lie in
     coverage and outside dump gaps, and record real changes, except that every
-    signal restates its value exactly where a dump gap ends.
+    signal restates its value exactly where a dump gap ends. A signal is all-x
+    before its first sample, so an all-x first sample is not a change; it is
+    allowed only at the coverage start or where a dump gap ends.
     """
 
     coverage: TraceCoverage
@@ -1045,7 +1059,13 @@ class MockTrace(ContractModel):
                     raise ValueError(f"{name}: sample width differs from declaration")
                 if any(i.contains(sample.time_ps) for i in self.unavailable):
                     raise ValueError(f"{name}: sample inside an unavailable interval")
-                if previous is not None:
+                if previous is None:
+                    all_x = set(sample.value.bits) == {"x"}
+                    if all_x and sample.time_ps != start and sample.time_ps not in resume_times:
+                        raise ValueError(
+                            f"{name}: an all-x first sample at {sample.time_ps} is not a change"
+                        )
+                else:
                     if sample.time_ps <= previous.time_ps:
                         raise ValueError(f"{name}: sample times must ascend strictly")
                     repeated = sample.value == previous.value
