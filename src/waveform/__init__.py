@@ -1,6 +1,12 @@
 """Track A: waveform parsing, time queries, and golden-model comparison."""
 
 from src.waveform.diff_engine import compare, compare_files
+from src.waveform.fst import (
+    ConversionFailedError,
+    ConverterUnavailableError,
+    convert_fst_to_vcd_text,
+    load_trace,
+)
 from src.waveform.parser import (
     InvalidTraceError,
     ParsedTrace,
@@ -11,6 +17,8 @@ from src.waveform.parser import (
 )
 
 __all__ = [
+    "ConversionFailedError",
+    "ConverterUnavailableError",
     "InvalidTraceError",
     "ParsedTrace",
     "SkippedVariable",
@@ -18,5 +26,7 @@ __all__ = [
     "VcdWaveformProvider",
     "compare",
     "compare_files",
+    "convert_fst_to_vcd_text",
+    "load_trace",
     "parse_vcd",
 ]
