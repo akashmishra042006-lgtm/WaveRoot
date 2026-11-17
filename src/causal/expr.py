@@ -7,8 +7,10 @@ width and signedness the elaborated AST assigned to it; evaluation relies on
 that instead of re-deriving SystemVerilog sizing rules.
 
 Evaluation is four-state. A signal that the trace cannot supply evaluates to
-all-``x``, which makes every predicate that depends on it unknown and therefore
-keeps every branch it guards.
+all-``x``. That is not the same as a recorded ``x``: an operator such as
+``===`` or a two-state cast turns an ``x`` into a known result, so
+``evaluate_guard`` treats any guard that reads an unavailable signal as
+unknown, and every branch it guards is kept.
 """
 
 from __future__ import annotations
@@ -22,7 +24,8 @@ from src.causal.fourstate import BinaryOp, CaseFlavor, Tri, UnaryOp, Vec
 from src.contracts import EdgeRole, SourceSpan
 
 Lookup = Callable[[str], Vec | None]
-"""Returns a signal's value at the observation being evaluated, or None."""
+"""Returns a signal's value at the observation being evaluated, or None when it is
+unavailable (not in the trace, not readable, or not reconstructible)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,9 +122,14 @@ class Replicate(Expr):
 
 @dataclass(frozen=True, slots=True)
 class Convert(Expr):
-    """A width or signedness conversion of ``operand`` to this node's type."""
+    """A width or signedness conversion of ``operand`` to this node's type.
+
+    ``two_state`` marks a conversion to a two-state type such as ``bit``:
+    every ``x`` or ``z`` bit becomes ``0`` (IEEE 1800 section 6.24.1).
+    """
 
     operand: Expr
+    two_state: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,7 +187,10 @@ def _evaluate(expr: Expr, lookup: Lookup) -> Vec:
     if isinstance(expr, Replicate):
         return Vec(evaluate(expr.operand, lookup).bits * expr.count, expr.signed)
     if isinstance(expr, Convert):
-        return fs.resize(evaluate(expr.operand, lookup), expr.width, expr.signed)
+        value = fs.resize(evaluate(expr.operand, lookup), expr.width, expr.signed)
+        if expr.two_state:
+            return Vec("".join(bit if bit in "01" else "0" for bit in value.bits), expr.signed)
+        return value
     return fs.unknown(expr.width, expr.signed)
 
 
@@ -283,9 +294,20 @@ class Guard:
     span: SourceSpan | None = None
 
 
+def reads_unavailable(expr: Expr, lookup: Lookup) -> bool:
+    """True when ``expr`` reads a signal ``lookup`` cannot supply."""
+    return any(lookup(signal) is None for signal in signals_of(expr))
+
+
 def evaluate_guard(guard: Guard, lookup: Lookup) -> Tri:
-    """Whether ``guard`` selects its branch: true, false, or unknown."""
+    """Whether ``guard`` selects its branch: true, false, or unknown.
+
+    A guard that reads an unavailable signal is unknown, whatever its operators
+    would make of an ``x``: the missing value is not a recorded ``x``.
+    """
     if guard.kind is GuardKind.UNSUPPORTED:
+        return Tri.UNKNOWN
+    if any(reads_unavailable(operand, lookup) for operand in guard_operands(guard)):
         return Tri.UNKNOWN
     if guard.kind in (GuardKind.IF, GuardKind.TERNARY):
         outcome = fs.truth(evaluate(guard.predicate, lookup))

@@ -106,6 +106,9 @@ class Driver:
     ``assigns`` are in execution order, so the last one whose guards hold wins.
     ``unsupported`` explains why the driver cannot be traversed, if it cannot.
     ``caveats`` describe ways the model is imprecise for this driver.
+    ``intermediate`` names signals the assignments read before the last
+    blocking write to them in the same process: the value read there is not
+    the one the trace records, so it must not be taken from the trace.
     """
 
     target: str
@@ -116,6 +119,7 @@ class Driver:
     span: SourceSpan | None
     unsupported: str | None = None
     caveats: tuple[str, ...] = ()
+    intermediate: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -342,6 +346,8 @@ class _Lowerer:
         self._texts: dict[str, str] = {}
         self._decisions = 0
         self._lvalue: ir.Expr | None = None
+        # Set when the process being lowered contains an intra-assignment delay.
+        self._delayed = False
 
     # ---- top level ------------------------------------------------------
 
@@ -432,8 +438,11 @@ class _Lowerer:
         written = set(by_target)
         for target, group in by_target.items():
             caveats = [caveat] if caveat else []
+            intermediate: tuple[str, ...] = ()
             if edge_type is EdgeType.COMBINATIONAL and process is not ProcessKind.CONTINUOUS:
-                caveats.extend(_intermediate_reads(assigns, group, written))
+                found = _intermediate_reads(assigns, group, written)
+                caveats.extend(found.values())
+                intermediate = tuple(found)
             self._drivers.setdefault(target, []).append(
                 Driver(
                     target=target,
@@ -444,6 +453,7 @@ class _Lowerer:
                     span=span,
                     unsupported=unsupported,
                     caveats=tuple(caveats),
+                    intermediate=intermediate,
                 )
             )
 
@@ -555,7 +565,13 @@ class _Lowerer:
         if kind is ast.ProceduralBlockKind.AlwaysLatch:
             unsupported = "always_latch (latches are outside the MVP)"
         assigns: list[GuardedAssign] = []
+        self._delayed = False
         self._lower_statement(statement, (), assigns)
+        if unsupported is None and self._delayed:
+            unsupported = (
+                "intra-assignment timing control such as `q <= #1 d` (delays are outside the "
+                "MVP, so the value is not taken at the clock edge)"
+            )
         if (
             unsupported is None
             and timing.edge_type is EdgeType.SEQUENTIAL
@@ -736,9 +752,11 @@ class _Lowerer:
         self._lvalue = None
         where = self._where(assignment.sourceRange.start)
         if assignment.timingControl is not None:
+            self._delayed = True
             self._diag(
                 "UNSUPPORTED_STATEMENT",
-                f"intra-assignment timing control at {where} is ignored.",
+                f"intra-assignment timing control at {where} is not modeled; the process that "
+                "contains it is not traced.",
             )
         if targets is None:
             self._diag(
@@ -909,14 +927,16 @@ class _Lowerer:
             return ir.Const(width, signed, bits)
         if isinstance(expression, ast.ConversionExpression):
             operand = self._lower(expression.operand)
-            if operand.width == width and operand.signed == signed:
+            # A cast to a two-state type such as bit turns x and z into 0 (6.24.1).
+            two_state = expression.operand.type.isFourState and not expression.type.isFourState
+            if operand.width == width and operand.signed == signed and not two_state:
                 return operand
             propagated = expression.conversionKind is ast.ConversionKind.Propagated
             if propagated and operand.signed != signed:
                 # IEEE 1800 11.8.2: a context-determined operand takes the propagated
                 # type first, so it is sign-extended only if that type is signed.
                 operand = self._fold(ir.Convert(operand.width, signed, operand))
-            return ir.Convert(width, signed, operand)
+            return ir.Convert(width, signed, operand, two_state)
         if isinstance(expression, ast.UnaryExpression):
             unary_op = _UNARY_OPS.get(expression.op)
             if unary_op is None:
@@ -1042,16 +1062,61 @@ class _Lowerer:
             high, low = _const_int(first), _const_int(second)
             if high is None or low is None:
                 return self._unsupported(expression, "range select", width, signed)
-            position = left - high if left >= right else high - left
-            if position < 0 or position * elem_width + width > value.width:
-                return ir.Const(width, signed, "x" * width)
-            return ir.PartSelect(width, signed, value, position * elem_width, f"[{high}:{low}]")
+            return self._constant_slice(value, high, low, left, right, elem_width, width, signed)
         mode = (
             ir.SelectMode.UP
             if expression.selectionKind is ast.RangeSelectionKind.IndexedUp
             else ir.SelectMode.DOWN
         )
         return ir.IndexedSelect(width, signed, value, first, left, right, elem_width, mode)
+
+    @staticmethod
+    def _constant_slice(
+        value: ir.Expr,
+        high: int,
+        low: int,
+        left: int,
+        right: int,
+        elem_width: int,
+        width: int,
+        signed: bool,
+    ) -> ir.Expr:
+        """``value[high:low]``; elements outside ``[left:right]`` read ``x`` (7.4.6).
+
+        A select that is only partly out of range keeps its in-range elements,
+        and so its dependence on ``value``.
+        """
+        step = -1 if high >= low else 1
+        total = abs(left - right) + 1
+        runs: list[tuple[int | None, int]] = []  # (first position or None for x, elements)
+        for index in range(high, low + step, step):
+            position = left - index if left >= right else index - left
+            inside = 0 <= position < total
+            start = position if inside else None
+            if runs:
+                previous, count = runs[-1]
+                if start is None and previous is None:
+                    runs[-1] = (None, count + 1)
+                    continue
+                if start is not None and previous is not None and previous + count == start:
+                    runs[-1] = (previous, count + 1)
+                    continue
+            runs.append((start, 1))
+        parts: list[ir.Expr] = []
+        for start, count in runs:
+            bits = count * elem_width
+            if start is None:
+                parts.append(ir.Const(bits, False, "x" * bits))
+            else:
+                parts.append(ir.PartSelect(bits, False, value, start * elem_width, f"[{high}:{low}]"))
+        if sum(part.width for part in parts) != width:
+            return ir.Const(width, signed, "x" * width)
+        if len(parts) == 1:
+            only = parts[0]
+            if isinstance(only, ir.PartSelect):
+                return ir.PartSelect(width, signed, value, only.offset, only.label)
+            return ir.Const(width, signed, "x" * width)
+        return ir.Concat(width, signed, tuple(parts))
 
     def _lower_member(
         self, expression: ast.MemberAccessExpression, width: int, signed: bool
@@ -1136,8 +1201,8 @@ class _Lowerer:
 
 def _intermediate_reads(
     ordered: Sequence[GuardedAssign], group: Sequence[GuardedAssign], written: set[str]
-) -> list[str]:
-    """Caveats for reads that may observe a value the trace never records.
+) -> dict[str, str]:
+    """Signals read where they may hold a value the trace never records, with a caveat each.
 
     Inside one combinational process a blocking assignment takes effect at
     once, so a read placed before the last write to the same signal sees an
@@ -1145,17 +1210,18 @@ def _intermediate_reads(
     """
     last_write = {assign.target: position for position, assign in enumerate(ordered)}
     positions = {id(assign): position for position, assign in enumerate(ordered)}
-    caveats: dict[str, None] = {}
+    found: dict[str, str] = {}
     for assign in group:
         position = positions[id(assign)]
         for signal in _assign_signals(assign):
             if signal in written and last_write[signal] >= position:
-                caveats.setdefault(
+                found.setdefault(
+                    signal,
                     f"{signal} is read by `{assign.text}` before its last blocking "
                     "assignment in the same process; the value read is an intermediate "
-                    "that the trace does not record"
+                    "that the trace does not record",
                 )
-    return list(caveats)
+    return found
 
 
 def _assign_signals(assign: GuardedAssign) -> tuple[str, ...]:

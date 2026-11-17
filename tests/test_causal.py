@@ -384,6 +384,12 @@ def test_evaluator_agrees_with_slang_constant_evaluation(tmp_path: Path, seed: i
     operands replaced by literals, are evaluated by slang as ``localparam``
     values. Select indices stay known because slang rejects an ``x`` index in a
     constant expression; that case has its own test below.
+
+    slang is the oracle here, not the standard. In one known case they differ:
+    slang 12.1 gives ``z`` for ``x ? z : z``, where IEEE 1800 Table 11-20 and
+    this evaluator give ``x``. ``test_finding4_unknown_conditional_follows_ieee
+    _table_11_20`` pins the standard, so a mismatch on that case must not be
+    fixed by following slang.
     """
     rng = random.Random(seed)
     expressions = [_random_expression(rng, 3) for _ in range(80)]
@@ -1385,13 +1391,13 @@ def test_settled_sink_that_also_reads_an_input_states_the_stability_assumption(
 ) -> None:
     source = (
         "module dut(input logic clk, d, m, output logic q, y);\n"
-        "  always_ff @(posedge clk) q <= d;\n"
+        "  always_ff @(posedge clk) q <= ~d;\n"
         "  assign y = q ^ m;\n"
         "endmodule\n"
     )
     design = build(tmp_path, source)
     provider = static_provider(
-        {"d": "1", "m": "0"},
+        {"d": "0", "m": "0"},
         changing={"q": [(0, "0"), (25000, "1")], "y": [(0, "0"), (25000, "1")]},
     )
     report = slice_failure(
@@ -1400,7 +1406,7 @@ def test_settled_sink_that_also_reads_an_input_states_the_stability_assumption(
     assert report.suspects[0].node_id == node_of(report, "q", 2, SETTLED).id
     text = report.assertions[0].text
     # q is written at edge 2 from d; y is then sampled at edge 3, by which time m may differ.
-    assert "((d === 1'b1))" in text and "|=> (!$isunknown(y) && (y == 1'b0));" in text
+    assert "((d === 1'b0))" in text and "|=> (!$isunknown(y) && (y == 1'b0));" in text
     assert "SVA_INPUT_STABILITY_ASSUMED" in codes(report)
     assert "Assumes tb.dut.m keeps its value until the next clock edge" in text
     assert compile_errors(source + "\n" + text) == []
@@ -1475,3 +1481,366 @@ def test_synthesize_assertion_works_from_a_report_alone(
     assert "|-> ##2 (!$isunknown(full) && (full == 1'b1));" in deep.assertion.text
     assert [d.code for d in deep.diagnostics] == ["SVA_LATENCY_ASSUMED"]
     assert compile_errors(design_text + "\n" + deep.assertion.text) == []
+
+
+# --------------------------------------------------------------------------
+# Review of PR #6: audit findings 1-7 and the benchmark ranking gaps
+# --------------------------------------------------------------------------
+
+PICK_FAILURE = failure_at("y", 2, 25000, actual="1010", expected="0101")
+PICK_VALUES = {"a": "1010", "b": "0101", "y": "1010"}
+
+
+def test_finding1_intermediate_blocking_value_never_prunes(tmp_path: Path) -> None:
+    """``t`` is 1 where ``if (t)`` reads it but 0 in the trace; simulation takes ``a``."""
+    design = build(
+        tmp_path,
+        "module m (input logic s, input logic [3:0] a, b, output logic [3:0] y);\n"
+        "  logic t;\n"
+        "  always_comb begin\n"
+        "    t = s;\n"
+        "    if (t) y = a;\n"
+        "    else y = b;\n"
+        "    t = 1'b0;\n"
+        "  end\n"
+        "endmodule\n",
+    )
+    assert design.drivers["y"][0].intermediate == ("t",)
+    provider = static_provider({**PICK_VALUES, "s": "1", "t": "0"})
+    report = slice_failure(PICK_FAILURE, provider, design, OPTIONS)
+    y = ("y", 2, SETTLED)
+    assert branches(edges_of(report, ("a", 2, SETTLED), y)) == {BranchStatus.UNKNOWN}
+    assert branches(edges_of(report, ("b", 2, SETTLED), y)) == {BranchStatus.UNKNOWN}
+    # The traced t is not the value the if read, so it is not followed.
+    assert not [e for e in report.edges if e.target == node_of(report, *y).id
+                and e.source.startswith("t.")]  # fmt: skip
+    assert report.truncated and "INTERMEDIATE_VALUE" in codes(report)
+    assert CausalReport.model_validate_json(report.model_dump_json()) == report
+
+
+def test_finding2_missing_signal_is_not_a_recorded_x(tmp_path: Path) -> None:
+    """``===`` would turn a fabricated x into a definite 0 and prune the true arm."""
+    design = build(
+        tmp_path,
+        "module m (input logic sel, input logic [3:0] a, b, output logic [3:0] y);\n"
+        "  assign y = (sel === 1'b1) ? a : b;\n"
+        "endmodule\n",
+    )
+    report = slice_failure(PICK_FAILURE, static_provider(PICK_VALUES), design, OPTIONS)
+    assert "SIGNAL_NOT_OBSERVED" in codes(report)
+    y = ("y", 2, SETTLED)
+    assert branches(edges_of(report, ("a", 2, SETTLED), y)) == {BranchStatus.UNKNOWN}
+    assert branches(edges_of(report, ("b", 2, SETTLED), y)) == {BranchStatus.UNKNOWN}
+    # The predicate is read whichever arm is taken, so that dependence is certain.
+    (control,) = edges_of(report, ("sel", 2, SETTLED), y)
+    assert (control.role, control.branch) == (EdgeRole.CONTROL, BranchStatus.RETAINED)
+    # A recorded x is still evaluated: === x is a definite 0, so the true arm is pruned.
+    recorded = slice_failure(
+        failure_at("y", 2, 25000, actual="0101", expected="1010"),
+        static_provider({**PICK_VALUES, "sel": "x", "y": "0101"}),
+        design,
+        OPTIONS,
+    )
+    assert branches(edges_of(recorded, ("a", 2, SETTLED), y)) == {BranchStatus.PRUNED}
+
+
+def test_finding3_intra_assignment_delay_is_not_traced(tmp_path: Path) -> None:
+    design = build(
+        tmp_path,
+        "module m (input logic clk, s, output logic q);\n"
+        "  always_ff @(posedge clk) q <= #1 s;\n"
+        "endmodule\n",
+    )
+    (driver,) = design.drivers["q"]
+    assert driver.unsupported is not None and "intra-assignment timing" in driver.unsupported
+    report = slice_failure(
+        failure_at("q", 2, 25000, actual="1", expected="0"),
+        static_provider({"s": "1", "q": "1"}),
+        design,
+        OPTIONS,
+    )
+    assert report.truncated and "UNSUPPORTED_DRIVER" in codes(report)
+    assert not has_node(report, "s")
+
+
+@pytest.mark.parametrize("condition", ["x", "z"])
+def test_finding4_unknown_conditional_follows_ieee_table_11_20(condition: str) -> None:
+    """IEEE 1800 Table 11-20: only agreeing 0/0 and 1/1 bits survive an unknown condition.
+
+    slang 12.1 gives ``z`` for ``x ? z : z``; the standard and this evaluator give ``x``.
+    The coordinator ruled for the standard, so it is encoded here directly.
+    """
+    for left in "01xz":
+        for right in "01xz":
+            expected = left if left == right and left in "01" else "x"
+            expr = ir.Conditional(
+                1,
+                False,
+                1,
+                ir.Const(1, False, condition),
+                ir.Const(1, False, left),
+                ir.Const(1, False, right),
+                None,
+            )
+            assert ir.evaluate(expr, lambda _signal: None).bits == expected, (left, right)
+
+
+def test_finding5_two_state_cast_turns_x_into_zero(tmp_path: Path) -> None:
+    design = build(
+        tmp_path,
+        "module m (input logic sel, input logic [3:0] a, b, output logic [3:0] y);\n"
+        "  assign y = (bit'(sel) === 1'b0) ? a : b;\n"
+        "endmodule\n",
+    )
+    rhs = design.drivers["y"][0].assigns[0].rhs
+    values = {"sel": Vec("x"), "a": Vec("1010"), "b": Vec("0101")}
+    assert ir.evaluate(rhs, values.__getitem__).bits == "1010", "slang: bit'(1'bx) is 0"
+    report = slice_failure(
+        PICK_FAILURE, static_provider({**PICK_VALUES, "sel": "x"}), design, OPTIONS
+    )
+    y = ("y", 2, SETTLED)
+    assert branches(edges_of(report, ("a", 2, SETTLED), y)) == {BranchStatus.RETAINED}
+    assert branches(edges_of(report, ("b", 2, SETTLED), y)) == {BranchStatus.PRUNED}
+
+
+def test_finding6_partly_out_of_range_select_keeps_its_in_range_bits(tmp_path: Path) -> None:
+    design = build(
+        tmp_path,
+        "module m (input logic [3:0] a, b, output logic [3:0] y, z);\n"
+        "  logic [3:0] v;\n"
+        "  logic [0:3] w;\n"
+        "  assign v = 4'b1010;\n"
+        "  assign w = 4'b1010;\n"
+        "  assign y = (v[4:1] === 4'bx101) ? a : b;\n"
+        "  assign z = {w[2:5], 2'b00} >> 2;\n"
+        "endmodule\n",
+    )
+    values = {"v": Vec("1010"), "w": Vec("1010"), "a": Vec("1010"), "b": Vec("0101")}
+    assert ir.evaluate(design.drivers["y"][0].assigns[0].rhs, values.__getitem__).bits == "1010"
+    # w is [0:3]: w[2:5] is w[2], w[3], then two out-of-range x bits.
+    z = design.drivers["z"][0].assigns[0].rhs
+    assert "w" in ir.signals_of(z)
+    report = slice_failure(
+        PICK_FAILURE, static_provider({**PICK_VALUES, "v": "1010", "w": "1010"}), design, OPTIONS
+    )
+    y = ("y", 2, SETTLED)
+    assert branches(edges_of(report, ("a", 2, SETTLED), y)) == {BranchStatus.RETAINED}
+    assert branches(edges_of(report, ("b", 2, SETTLED), y)) == {BranchStatus.PRUNED}
+    (control,) = edges_of(report, ("v", 2, SETTLED), y)
+    assert control.role is EdgeRole.CONTROL, "v stays in the graph"
+
+
+class CountingProvider(MockWaveformProvider):
+    """Counts value queries, to check that a limit bounds the work."""
+
+    def __init__(self, trace: MockTrace) -> None:
+        super().__init__(trace)
+        self.queries = 0
+
+    def get_value_at(self, *args: object, **kwargs: object) -> LogicValue:
+        self.queries += 1
+        return super().get_value_at(*args, **kwargs)  # type: ignore[arg-type]
+
+
+def test_finding7_depth_limit_bounds_the_hold_scan(tmp_path: Path) -> None:
+    design = build(
+        tmp_path,
+        "module m (input logic clk, en, d, output logic y);\n"
+        "  always_ff @(posedge clk) if (en) y <= d;\n"
+        "endmodule\n",
+    )
+    cycles = 2000
+    edges = tuple(5000 + 10000 * cycle for cycle in range(cycles))
+    signals: dict[str, Sequence[tuple[int, str]]] = {"clk": clock_samples(edges)}
+    signals.update({"en": [(0, "0")], "d": [(0, "1")], "y": [(0, "0")]})
+    trace = make_trace(edges[-1] + 5000, signals)
+    failure = failure_at("y", cycles - 1, edges[-1], actual="0", expected="1")
+
+    limited = CountingProvider(trace)
+    options = SliceOptions(trace_scope=SCOPE, max_cycles_back=1, include_waveform=False)
+    report = slice_failure(failure, limited, design, options)
+    assert report.truncated and "SLICE_DEPTH_LIMIT" in codes(report)
+    assert limited.queries < 40, limited.queries
+
+    unlimited = CountingProvider(trace)
+    slice_failure(failure, unlimited, design, SliceOptions(trace_scope=SCOPE, include_waveform=False))
+    assert unlimited.queries > cycles
+
+
+MAC_SV = """\
+module mac (
+  input  logic               clk,
+  input  logic               rst_n,
+  input  logic               in_valid,
+  input  logic signed  [7:0] a,
+  input  logic signed  [7:0] b,
+  output logic               out_valid,
+  output logic signed [15:0] out_data
+);
+  logic signed [15:0] acc_q;
+  logic               valid_q;
+  logic signed [15:0] prod;
+  logic signed [16:0] sum_wide;
+  logic signed [16:0] sum_cmp;
+  logic signed [15:0] next_acc;
+
+  assign prod     = 16'(a * b);
+  assign sum_wide = 17'(acc_q) + 17'(prod);
+  assign sum_cmp  = 17'($signed(sum_wide[15:0]));
+  assign next_acc = (sum_cmp > 17'sd32767)  ? 16'sd32767  :
+                    (sum_cmp < -17'sd32768) ? -16'sd32768 :
+                    sum_wide[15:0];
+
+  always_ff @(posedge clk) begin
+    if (!rst_n) begin
+      acc_q     <= 16'sd0;
+      valid_q   <= 1'b0;
+      out_valid <= 1'b0;
+      out_data  <= 16'sd0;
+    end else begin
+      if (in_valid)
+        acc_q <= next_acc;
+      valid_q   <= in_valid;
+      out_valid <= valid_q;
+      out_data  <= acc_q;
+    end
+  end
+endmodule
+"""
+
+
+def _line_of(source: str, text: str) -> int:
+    return next(n for n, line in enumerate(source.splitlines(), 1) if text in line)
+
+
+def _bits(value: int, width: int) -> str:
+    return format(value & ((1 << width) - 1), f"0{width}b")
+
+
+def _sext(value: int, width: int) -> int:
+    value &= (1 << width) - 1
+    return value - (1 << width) if value >> (width - 1) else value
+
+
+def mac_provider() -> MockWaveformProvider:
+    """The benchmark's directed run: three -128 * 125 accumulations, then idle.
+
+    Values follow the mutant RTL cycle by cycle, so the trace is what a
+    four-state simulator would record.
+    """
+    edges = (5000, 15000, 25000, 35000)
+    a, b = -128, 125
+    valid_before = [1, 1, 1, 0]
+
+    def comb(acc: int) -> dict[str, str]:
+        prod = _sext(a * b, 16)
+        wide = _sext(acc + prod, 17)
+        cmp = _sext(_sext(wide, 16), 17)
+        nxt = 32767 if cmp > 32767 else -32768 if cmp < -32768 else _sext(wide, 16)
+        return {
+            "prod": _bits(prod, 16), "sum_wide": _bits(wide, 17), "sum_cmp": _bits(cmp, 17),
+            "next_acc": _bits(nxt, 16), "acc_q": _bits(acc, 16),
+        }  # fmt: skip
+
+    acc, out, valid_q, out_valid = 0, 0, 0, 0
+    states = [(0, {**comb(acc), "out_data": _bits(out, 16), "valid_q": "0", "out_valid": "0"})]
+    for edge, valid in zip(edges, valid_before):
+        new_acc = int(comb(acc)["next_acc"], 2) if valid else acc
+        acc, out = _sext(new_acc, 16), acc
+        valid_q, out_valid = valid, valid_q
+        states.append(
+            (edge, {**comb(acc), "out_data": _bits(out, 16), "valid_q": str(valid_q),
+                    "out_valid": str(out_valid)})  # fmt: skip
+        )
+    changing: dict[str, list[tuple[int, str]]] = {}
+    for time, values in states:
+        for name, bits in values.items():
+            samples = changing.setdefault(name, [])
+            if not samples or samples[-1][1] != bits:
+                samples.append((time, bits))
+    changing["in_valid"] = [(0, "1"), (30000, "0")]
+    return static_provider(
+        {"rst_n": "1", "a": _bits(a, 8), "b": _bits(b, 8)}, changing=changing, edges=edges
+    )
+
+
+def test_ranking_puts_the_computing_line_above_plain_copies(tmp_path: Path) -> None:
+    """Benchmark case 03: the narrowing on the sum_cmp line creates the wrong value."""
+    design = build(tmp_path, MAC_SV, "mac.sv")
+    failure = failure_at("out_data", 3, 35000, actual=_bits(17536, 16), expected=_bits(-32768, 16))
+    options = SliceOptions(trace_scope=SCOPE, reset_path="tb.dut.rst_n", reset_active="0")
+    report = slice_failure(failure, mac_provider(), design, options)
+    assert node_of(report, "out_data", 3, SETTLED).value == lv(_bits(17536, 16))
+    lines = [s.location.line for s in report.suspects if s.location is not None]
+    assert _line_of(MAC_SV, "assign sum_cmp") in lines[:2], lines
+    copies = [_line_of(MAC_SV, "out_data  <= acc_q"), _line_of(MAC_SV, "acc_q <= next_acc")]
+    computing = [_line_of(MAC_SV, "assign sum_cmp"), _line_of(MAC_SV, "assign sum_wide")]
+    assert max(lines.index(line) for line in computing) < min(lines.index(line) for line in copies)
+    assert CausalReport.model_validate_json(report.model_dump_json()) == report
+
+
+ALU_SV = """\
+module alu (
+  input  logic       clk,
+  input  logic       rst_n,
+  input  logic       in_valid,
+  input  logic [7:0] a,
+  input  logic [7:0] b,
+  input  logic       cfg_we,
+  input  logic       cfg_sel,
+  output logic       out_valid,
+  output logic [7:0] out_data
+);
+  logic sel_q;
+
+  always_ff @(posedge clk) begin
+    if (!rst_n) begin
+      out_valid <= 1'b0;
+      out_data  <= 8'h00;
+    end else begin
+      if (cfg_we)
+        sel_q <= cfg_sel;
+      out_valid <= in_valid;
+      if (in_valid)
+        out_data <= sel_q ? b : a;
+    end
+  end
+endmodule
+"""
+
+
+def alu_provider() -> MockWaveformProvider:
+    """Benchmark case 04, directed: reset for two edges, then a valid input at cycle 0."""
+    return static_provider(
+        {"in_valid": "1", "a": "00000000", "b": "11111111", "cfg_we": "0", "cfg_sel": "0",
+         "sel_q": "x"},  # fmt: skip
+        changing={
+            "rst_n": [(0, "0"), (20000, "1")],
+            "out_valid": [(0, "x"), (5000, "0"), (25000, "1")],
+            "out_data": [(0, "x" * 8), (5000, "0" * 8), (25000, "x" * 8)],
+        },
+    )
+
+
+def test_unreset_register_is_located_at_the_reset_branch(tmp_path: Path) -> None:
+    """Benchmark case 04: the reset branch never assigns sel_q, so it is x at cycle 0."""
+    design = build(tmp_path, ALU_SV, "alu.sv")
+    failure = failure_at("out_data", 0, 25000, actual="x" * 8, expected="0" * 8)
+    options = SliceOptions(trace_scope=SCOPE, reset_path="tb.dut.rst_n", reset_active="0")
+    report = slice_failure(failure, alu_provider(), design, options)
+    reset_first = _line_of(ALU_SV, "if (!rst_n)")
+    reset_last = _line_of(ALU_SV, "out_data  <= 8'h00")
+    second = report.suspects[1]
+    assert second.node_id == node_of(report, "sel_q", 0, BEFORE).id
+    assert second.location is not None
+    assert (second.location.line, second.location.end_line) == (reset_first, reset_last)
+    assert "reset branch of its clocked process does not assign it" in second.reason
+    assert report.suspects[0].location is not None
+    assert report.suspects[0].location.line == _line_of(ALU_SV, "out_data <= sel_q ? b : a")
+    assert CausalReport.model_validate_json(report.model_dump_json()) == report
+
+    # Without a reset in the options nothing is guessed: the value stays an epoch boundary.
+    plain = slice_failure(failure, alu_provider(), design, OPTIONS)
+    boundary = next(s for s in plain.suspects if s.node_id == node_of(plain, "sel_q", 0, BEFORE).id)
+    assert boundary.location is not None
+    assert boundary.location.line == _line_of(ALU_SV, "logic sel_q;")

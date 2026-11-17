@@ -167,14 +167,17 @@ class _Kind(StrEnum):
     CARRY = "carry"
     INPUT = "input"
     EPOCH_BOUNDARY = "epoch_boundary"
+    UNRESET = "unreset"
     UNDRIVEN = "undriven"
     TRUNCATED = "truncated"
 
 
-# Ordering of suspects. Lower sorts first. RTL statements come before the
-# places where the slice merely ends.
+# Ordering of suspects. Lower sorts first. Statements that compute a value come
+# first, then statements that only forward one, then the places where the slice
+# merely ends.
 _STATEMENT_TIER: Final = 0
-_BOUNDARY_TIER: Final = 1
+_FORWARD_TIER: Final = 1
+_BOUNDARY_TIER: Final = 2
 _BOUNDARY_RANK: Final = {
     _Kind.TRUNCATED: 0,
     _Kind.UNDRIVEN: 1,
@@ -192,6 +195,20 @@ class _Node:
     kind: _Kind = _Kind.PENDING
     note: str = ""
     changed: bool | None = None
+    forward: bool = False
+
+
+def _is_forward(expr: ir.Expr) -> bool:
+    """True when ``expr`` only passes a signal on: the signal or a constant select of it.
+
+    A conversion that changes width, or turns x/z into 0, computes a new value
+    and is not a forward; one that only changes signedness is.
+    """
+    while isinstance(expr, (ir.Convert, ir.PartSelect)):
+        if isinstance(expr, ir.Convert) and (expr.two_state or expr.width != expr.operand.width):
+            return False
+        expr = expr.operand if isinstance(expr, ir.Convert) else expr.value
+    return isinstance(expr, ir.SignalRef)
 
 
 @dataclass(slots=True)
@@ -523,6 +540,14 @@ class _Slicer:
                 continue
             for caveat in driver.caveats:
                 self._diag("IMPRECISE_DRIVER", f"{path}: {caveat}.")
+            if driver.intermediate:
+                names = ", ".join(self._trace_path(signal) for signal in driver.intermediate)
+                self._limit(
+                    "INTERMEDIATE_VALUE",
+                    f"{path} reads {names} at an intermediate point of its process, where the "
+                    "trace does not record the value; those reads are treated as unknown, no "
+                    "branch is pruned on them, and the slice does not follow them.",
+                )
             if driver.edge_type is EdgeType.COMBINATIONAL:
                 self._expand_driver(key, node, driver, cycle, phase)
             elif self._clock_matches(driver):
@@ -584,7 +609,13 @@ class _Slicer:
         signal = key[0]
         path = self._trace_path(signal)
         edge_type = driver.edge_type
-        lookup = self._lookup(cycle, phase)
+        observed = self._lookup(cycle, phase)
+        hidden = frozenset(driver.intermediate)
+
+        def lookup(name: str) -> Vec | None:
+            # An intermediate value read inside the process is not the traced one.
+            return None if name in hidden else observed(name)
+
         when = self._when(cycle, phase)
         outcomes = [
             [ir.evaluate_guard(guard, lookup) for guard in assign.guards]
@@ -600,6 +631,8 @@ class _Slicer:
                     "operands are kept as dependencies without evaluation.",
                 )
             for read in ir.collect_reads(assign.rhs):
+                if read.signal in hidden:
+                    continue
                 status, reason = verdict.status, verdict.why
                 if status is not BranchStatus.PRUNED:
                     for guard in read.guards:
@@ -622,6 +655,8 @@ class _Slicer:
                 )
             for operand in assign.index_operands:
                 for read in ir.collect_reads(operand, EdgeRole.CONTROL):
+                    if read.signal in hidden:
+                        continue
                     self._add_edge(
                         (read.signal, cycle, phase),
                         key,
@@ -647,6 +682,8 @@ class _Slicer:
             status, reason = self._judge_decision(decision, signal, lookup, when)
             for operand in decision.operands:
                 for read in ir.collect_reads(operand, EdgeRole.CONTROL):
+                    if read.signal in hidden:
+                        continue
                     self._add_edge(
                         (read.signal, cycle, phase),
                         key,
@@ -722,6 +759,12 @@ class _Slicer:
                 BranchStatus.UNKNOWN,
                 f"{guard.text} is not evaluated; every branch it guards is kept.",
             )
+        if any(ir.reads_unavailable(operand, lookup) for operand in ir.guard_operands(guard)):
+            return (
+                BranchStatus.UNKNOWN,
+                f"{label} `{guard.text}` reads a value that is not available {when}; every "
+                "branch it guards is kept.",
+            )
         value = ir.evaluate(guard.predicate, lookup)
         shown = ir.literal(value.bits)
         if enclosing is Tri.UNKNOWN or not value.is_known:
@@ -767,6 +810,7 @@ class _Slicer:
             return
         assign, verdict = live[-1]
         node.location = assign.span or driver.span or node.location
+        node.forward = all(_is_forward(candidate.rhs) for candidate, _ in live)
         if kind is _Kind.COMBINATIONAL:
             node.note = f"`{assign.text}` drives {path} to {shown} {when}"
             return
@@ -822,6 +866,56 @@ class _Slicer:
         after = self._sample(signal, cycle, SamplingPhase.SETTLED)
         return before is None or after is None or before == after
 
+    def _unreset_branch(self, signal: str, drivers: tuple[Driver, ...]) -> SourceSpan | None:
+        """The reset branch that leaves ``signal`` unassigned, if there is one.
+
+        Uses only the reset named in ``SliceOptions``; nothing is detected by
+        name. The register's clocked process must open with an ``if`` on that
+        reset alone, every assignment to the register must sit in the other
+        branch, and the span covers the condition and the reset branch's
+        assignments to other registers.
+        """
+        reset_path, active = self._options.reset_path, self._options.reset_active
+        reset = self._local(reset_path) if reset_path is not None else None
+        if reset is None or active not in ("0", "1"):
+            return None
+        for driver in drivers:
+            opening = [assign.guards[0] for assign in driver.assigns if assign.guards]
+            if not opening or len(opening) != len(driver.assigns):
+                continue
+            guard = opening[0]
+            if guard.kind is not ir.GuardKind.IF or guard.span is None:
+                continue
+            if any(other.decision != guard.decision for other in opening):
+                continue
+            if ir.signals_of(guard.predicate) != (reset,):
+                continue
+            taken = fs.truth(
+                ir.evaluate(guard.predicate, lambda name: Vec(active) if name == reset else None)
+            )
+            if taken is Tri.UNKNOWN:
+                continue
+            in_reset = taken is Tri.TRUE
+            if any(other.polarity is in_reset for other in opening):
+                continue
+            lines = [guard.span.line, guard.span.end_line]
+            for found in self._design.drivers.values():
+                for sibling in found:
+                    for assign in sibling.assigns:
+                        first = assign.guards[0] if assign.guards else None
+                        if (
+                            first is not None
+                            and first.decision == guard.decision
+                            and first.polarity is in_reset
+                            and assign.span is not None
+                            and assign.span.source_id == guard.span.source_id
+                        ):
+                            lines.extend((assign.span.line, assign.span.end_line))
+            return SourceSpan(
+                source_id=guard.span.source_id, line=min(lines), end_line=max(lines)
+            )
+        return None
+
     def _carry(self, key: _Key, node: _Node, drivers: tuple[Driver, ...]) -> None:
         """Link a register read ``before`` an edge to the earlier edge that wrote it."""
         signal, cycle, _ = key
@@ -852,6 +946,16 @@ class _Slicer:
                 )
                 return
         if cycle == 0:
+            reset_branch = self._unreset_branch(signal, drivers)
+            if reset_branch is not None:
+                node.kind = _Kind.UNRESET
+                node.location = reset_branch
+                node.note = (
+                    f"{path} is {shown} before cycle 0 of epoch {self._epoch}, but the reset "
+                    "branch of its clocked process does not assign it, so its value is left "
+                    "over from before reset"
+                )
+                return
             node.kind = _Kind.EPOCH_BOUNDARY
             node.note = (
                 f"{path} is {shown} before cycle 0 of epoch {self._epoch}; that value was "
@@ -867,10 +971,16 @@ class _Slicer:
                 "to the edge that wrote it.",
             )
             return
-        if not self._options.expand_holds:
-            while source_cycle > 0 and self._held(signal, drivers, source_cycle):
-                source_cycle -= 1
         limit = self._options.max_cycles_back
+        if not self._options.expand_holds:
+            # Never scan past the depth limit: the work stays bounded by it.
+            floor = 0 if limit is None else self._anchor_cycle - limit
+            while (
+                source_cycle > 0
+                and source_cycle >= floor
+                and self._held(signal, drivers, source_cycle)
+            ):
+                source_cycle -= 1
         if limit is not None and self._anchor_cycle - source_cycle > limit:
             self._stop(
                 node,
@@ -905,14 +1015,16 @@ class _Slicer:
 
     def _distances(
         self, anchor: _Key
-    ) -> tuple[dict[_Key, int], dict[_Key, int], dict[_Key, _Key]]:
-        """Hops and storage boundaries from the anchor, and each node's next hop to it."""
+    ) -> tuple[dict[_Key, int], dict[_Key, int], dict[_Key, _Key], dict[_Key, EdgeRole]]:
+        """Hops and storage boundaries from the anchor, each node's next hop to it, and
+        the role of the edge that hop uses."""
         incoming: dict[_Key, list[_Edge]] = {}
         for edge in self._edges.values():
             if edge.branch is not BranchStatus.PRUNED:
                 incoming.setdefault(edge.target, []).append(edge)
         hops = {anchor: 0}
         toward: dict[_Key, _Key] = {}
+        via: dict[_Key, EdgeRole] = {}
         queue = deque([anchor])
         while queue:
             current = queue.popleft()
@@ -920,6 +1032,7 @@ class _Slicer:
                 if edge.source not in hops:
                     hops[edge.source] = hops[current] + 1
                     toward[edge.source] = current
+                    via[edge.source] = edge.role
                     queue.append(edge.source)
         boundaries = {anchor: 0}
         pending = deque([anchor])
@@ -934,7 +1047,7 @@ class _Slicer:
                         pending.append(edge.source)
                     else:
                         pending.appendleft(edge.source)
-        return hops, boundaries, toward
+        return hops, boundaries, toward, via
 
     def _rank(self, anchor: _Key) -> tuple[SuspectLocation, ...]:
         """Order candidate causes.
@@ -943,34 +1056,49 @@ class _Slicer:
         only restate a register value. Candidates that share a source location
         collapse to the one nearest the failure. The order is:
 
-        1. RTL statements before places where the slice merely ends (module
-           inputs, the reset boundary, undriven or untraced signals);
+        1. RTL statements that compute a value, then statements that only
+           forward one (a register or wire assigned a signal or a constant
+           select of it), then places where the slice merely ends (module
+           inputs, the reset boundary, undriven or untraced signals). A copy
+           cannot have created a wrong value, so the statement that computed
+           it is the better first candidate. A register that the reset branch
+           leaves unassigned counts as a computing statement located at that
+           reset branch, because that is where the fix goes;
         2. fewer storage boundaries from the failing observation first, because
            the failure is the first divergence and the most recent logic is the
            most likely to have introduced it;
-        3. a register write that changed state, then combinational logic, then
-           a register write that changed nothing, then a hold;
-        4. fewer dependency hops, then signal path, later cycle, and phase.
+        3. a register write that changed state or a register left unreset, then
+           combinational logic, then a register write that changed nothing,
+           then a hold;
+        4. fewer dependency hops; then a node reached through a control edge
+           before one reached through data, since at equal distance the
+           condition that chose a path is a likelier defect than a value it
+           forwarded; then signal path, later cycle, and phase.
 
         The rank is ordinal and deterministic. It is a heuristic, not a
         probability.
         """
-        hops, boundaries, toward = self._distances(anchor)
-        scored: list[tuple[tuple[int, int, int, int, str, int, str], _Key]] = []
+        hops, boundaries, toward, via = self._distances(anchor)
+        scored: list[tuple[tuple[int, int, int, int, int, str, int, str], _Key]] = []
         for key in self._reached:
             node = self._nodes[key]
             if node.kind in (_Kind.PENDING, _Kind.CARRY) or key not in hops:
                 continue
             if node.kind in _BOUNDARY_RANK:
                 tier, kind_rank = _BOUNDARY_TIER, _BOUNDARY_RANK[node.kind]
+            elif node.kind is _Kind.UNRESET:
+                tier, kind_rank = _STATEMENT_TIER, 0
             elif node.kind is _Kind.STATE_UPDATE:
                 tier, kind_rank = _STATEMENT_TIER, 0 if node.changed else 2
             elif node.kind is _Kind.COMBINATIONAL:
                 tier, kind_rank = _STATEMENT_TIER, 1
             else:
                 tier, kind_rank = _STATEMENT_TIER, 3
+            if tier == _STATEMENT_TIER and node.forward:
+                tier = _FORWARD_TIER
+            role = 0 if via.get(key) is EdgeRole.CONTROL else 1
             signal, cycle, phase = key
-            score = (tier, boundaries[key], kind_rank, hops[key], signal, -cycle, phase.value)
+            score = (tier, boundaries[key], kind_rank, hops[key], role, signal, -cycle, phase.value)
             scored.append((score, key))
         scored.sort()
 
