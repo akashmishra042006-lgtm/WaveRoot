@@ -29,7 +29,7 @@ export function RunPanel({ client, pollMs = 300, onResult }: Props) {
   const [comparison, setComparison] = useState<"track-a" | "self-check">("track-a");
   const [job, setJob] = useState<JobInfo | null>(null);
   const [error, setError] = useState("");
-  const timer = useRef<ReturnType<typeof setTimeout>>();
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const live = useRef(true);
 
   const connect = useCallback(async () => {
