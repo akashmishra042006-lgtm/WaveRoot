@@ -126,6 +126,28 @@ one real self-check record (`real_fifo_fail_selfcheck.json`) to test the note
 that only that adapter shows. Still open: C04 part 2 (Track B causal adapter)
 waits for Track B (#6, #15).
 
+## C06 — local API (done; needs cold review)
+
+`src/app/api.py` (stdlib, `python -m src.app.cli serve`): loopback only; `Host`
+and `Origin` guards (writes need an allowed `Origin`); clients send benchmark
+ids, never paths, under one `--root`; bounded JSON; jobs queued/running/
+cancelling/cancelled/finished/failed with a cancel event that reaches the
+simulator process group; run records scrubbed of server paths; sources served
+by id only for ids the report declares, inside the case directory, when the
+SHA-256 matches. UI: `ui/src/api/client.ts` and `components/RunPanel.tsx` (the
+service is optional; offline is an explicit state; `?api=` accepts loopback
+http only). Tests: `tests/track_c/test_api.py`, `ui/src/test/api.test.tsx`, and
+`ui/scripts/live_check.py` (real Chrome + real server + real Verilator,
+including a UI cancel; runs in CI's simulators job).
+
+Limits to know: no authentication (any local program can use the API; the
+guards stop web pages and other hosts); one job at a time by default; job
+records live in memory and are lost on restart (run directories on disk
+remain); the UI serves no built bundle itself (use `vite preview` or `dev`,
+whose origins are allowed by default). A real run today has no causal report
+(Track B), so the source/graph/waveform panels fill in only once C04 part 2
+lands; the source endpoint is covered by tests with the mock causal report.
+
 ## Open questions
 
 - Dev 1: spec §8.1 forbids epochs without golden records, so handshake
@@ -146,5 +168,5 @@ every gate against the whole stack.
 
 ## Next single ticket
 
-Independent cold review of C03+C05+C04 part 1 (Prompt 5) in a fresh session.
-Then C04 part 2 when Track B merges, and C06 (local API).
+Independent cold review of the C06 PR in a fresh session. Then C04 part 2
+when Track B merges, then C07 (release evidence).

@@ -60,6 +60,12 @@ jobs:
         run: uv sync --locked
       - name: Integration tests (real simulator runs)
         run: uv run pytest -m integration -q --durations=10
+      - name: UI against the real API and simulator (Chrome)
+        if: hashFiles('ui/package.json') != '' && hashFiles('ui/scripts/live_check.py') != ''
+        run: |
+          npm --prefix ui ci
+          npm --prefix ui run build
+          uv run --with playwright python ui/scripts/live_check.py
 
   ui:
     name: UI · tests, build, layout check

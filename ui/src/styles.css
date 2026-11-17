@@ -260,3 +260,8 @@ main { padding: 0.75rem 1rem 2rem; display: flex; flex-direction: column; gap: 0
 .header-actions { min-width: 0; max-width: 100%; }
 .select { min-width: 0; max-width: 100%; }
 .select select { min-width: 0; max-width: 100%; text-overflow: ellipsis; }
+
+.run-panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 0.5rem 0.75rem; margin-bottom: 0.75rem; }
+.run-panel p { margin: 0.2rem 0; }
+.run-controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.run-error { color: var(--bad, #b00020); }
