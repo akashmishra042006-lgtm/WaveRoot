@@ -10,6 +10,7 @@ from __future__ import annotations
 import math
 import shutil
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
 
@@ -121,10 +122,15 @@ def trace_kind(path: Path) -> str:
     )
 
 
-def load_trace(path: Path, *, timeout_s: float = 120.0) -> VcdWaveformProvider:
-    """Load a ``.vcd`` or ``.fst`` trace into a provider."""
+def load_trace(
+    path: Path, *, timeout_s: float = 120.0, keep: Sequence[str] | None = None
+) -> VcdWaveformProvider:
+    """Load a ``.vcd`` or ``.fst`` trace into a provider.
+
+    ``keep`` selects signals by hierarchy pattern, as in ``parse_vcd``.
+    """
     if trace_kind(path) == "fst":
         text = convert_fst_to_vcd_text(path, timeout_s=timeout_s)
     else:
         text = path.read_text(encoding="utf-8")
-    return VcdWaveformProvider(parse_vcd(text))
+    return VcdWaveformProvider(parse_vcd(text, keep=keep))

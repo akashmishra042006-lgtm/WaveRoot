@@ -7,6 +7,7 @@ fixture. No HDL simulator runs in this suite, so it is not end-to-end coverage.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +45,7 @@ from src.waveform import (
     VcdWaveformProvider,
     compare,
     compare_files,
+    match_paths,
     parse_vcd,
 )
 
@@ -1004,3 +1006,256 @@ def test_handshake_gap_after_completion_cannot_rule_out_extras() -> None:
     result = compare(VcdWaveformProvider.from_text(gapped), golden(HANDSHAKE_HEADER, transactions(1)))
     assert (result.status, codes_of(result)) == (AnalysisStatus.INCONCLUSIVE, ["TRACE_GAP"])
     assert result.compared_values == 1
+
+
+# --------------------------------------------------------------------------
+# Hierarchy glob selection (keep)
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("pattern", "path", "expected"),
+    [
+        ("tb.dut.*", "tb.dut.clk", True),
+        ("tb.dut.*", "tb.dut.u.clk", False),  # * stays inside one component
+        ("tb.dut.*", "tb.dut", False),
+        ("tb.*.clk", "tb.dut.clk", True),
+        ("tb.**.clk", "tb.clk", True),  # ** matches zero components
+        ("tb.**.clk", "tb.dut.clk", True),
+        ("tb.**.clk", "tb.dut.u.v.clk", True),
+        ("tb.**.clk", "tb.dut.clk_en", False),
+        ("tb.**", "tb.dut.clk", True),
+        ("tb.**", "tb", True),
+        ("**", "tb.dut.clk", True),
+        ("**.clk", "clk", True),
+        ("tb.**.**.clk", "tb.clk", True),
+        ("tb.**.u.**.q", "tb.a.u.b.c.q", True),
+        ("tb.**.u.**.q", "tb.a.b.q", False),
+        ("tb.dut.w?tr", "tb.dut.wptr", True),
+        ("tb.dut.w?tr", "tb.dut.wtr", False),
+        ("tb.dut.w?tr", "tb.dut.wpptr", False),
+        ("tb.dut.?ptr", "tb.dut.wptr", True),
+        ("tb.d?t.wptr", "tb.d.t.wptr", False),  # ? never matches the separator
+        ("tb.dut.*ptr", "tb.dut.ptr", True),  # * may match nothing
+        ("tb.dut.in_*", "tb.dut.in_valid", True),
+        ("tb.dut.CLK", "tb.dut.clk", False),  # case-sensitive
+        ("tb.dut.clk", "tb.dut.clk", True),
+        ("tb.dut.clk", "tb.dut.clk2", False),  # whole path, not a prefix
+        ("dut.clk", "tb.dut.clk", False),  # anchored at the start
+        ("top.mem[3]", "top.mem[3]", True),  # brackets are literal
+        ("top.mem[3]", "top.mem3", False),
+        ("top.mem[?]", "top.mem[3]", True),
+        ("top.mem[*]", "top.mem[12]", True),
+        ("top.gen[2].*", "top.gen[2].q", True),
+        ("top.gen[2].*", "top.gen[1].q", False),
+        ("top.my$sig", "top.my$sig", True),  # regex metacharacters are literal
+        ("top.a+b", "top.aab", False),
+    ],
+)
+def test_glob_pattern_semantics(pattern: str, path: str, expected: bool) -> None:
+    if expected:
+        assert match_paths([path], [pattern]) == (path,)
+    else:
+        with pytest.raises(InvalidQueryError, match=re.escape(repr(pattern))):
+            match_paths([path], [pattern])
+
+
+def test_select_preserves_input_order_without_duplicates() -> None:
+    paths = ["tb.dut.wptr", "tb.dut.clk", "tb.dut.rptr", "tb.top.clk"]
+    assert match_paths(paths, ["**.clk", "tb.dut.*", "tb.dut.?ptr"]) == tuple(paths)
+    assert match_paths(paths, ["tb.dut.rptr", "tb.dut.wptr"]) == ("tb.dut.wptr", "tb.dut.rptr")
+    assert match_paths([*paths, "tb.dut.clk"], ["tb.dut.clk"]) == ("tb.dut.clk",)
+
+
+SELECT_HEADER = """$timescale 1 ns $end
+$scope module tb $end
+$scope module dut $end
+$var wire 1 ! clk $end
+$var wire 3 # wptr [2:0] $end
+$upscope $end
+$upscope $end
+$enddefinitions $end
+#0
+"""
+
+
+@pytest.mark.parametrize(
+    ("patterns", "fragment"),
+    [
+        (["tb.dut.nothing"], "tb.dut.nothing"),
+        (["tb.dut.clk", "tb.**.nope"], "tb.**.nope"),
+        (["TB.dut.clk"], "TB.dut.clk"),
+        ([""], "non-empty"),
+        (["tb..clk"], "empty component"),
+        (["tb.dut."], "empty component"),
+        (["tb.a**.clk"], "whole component"),
+        ([], "at least one"),
+        ("tb.dut.clk", "not one string"),
+    ],
+)
+def test_select_rejects_unmatched_and_malformed_patterns(patterns: Any, fragment: str) -> None:
+    with pytest.raises(InvalidQueryError, match=re.escape(fragment)):
+        match_paths(["tb.dut.clk", "tb.dut.wptr"], patterns)
+    with pytest.raises(InvalidQueryError, match=re.escape(fragment)):
+        parse_vcd(SELECT_HEADER, keep=patterns)
+
+
+def assert_kept_signals_unchanged(full: VcdWaveformProvider, kept: VcdWaveformProvider, paths: list[str]) -> None:
+    assert kept.trace.signal_paths == tuple(paths)
+    assert kept.get_coverage() == full.get_coverage()
+    assert kept.trace.unavailable == full.trace.unavailable
+    assert kept.trace.skipped == full.trace.skipped
+    start, end = full.get_coverage().start_ps, full.get_coverage().end_ps + 1
+    for path in paths:
+        assert kept.get_signal_decl(path) == full.get_signal_decl(path)
+        assert kept.trace._series_by_path[path] == full.trace._series_by_path[path]
+    assert kept.get_window_slice(paths, start, end) == full.get_window_slice(paths, start, end)
+
+
+def test_keep_matches_unfiltered_results_on_the_fifo_fixture(fixture: MockFixture) -> None:
+    text = vcd_from_mock(fixture.trace)
+    full = VcdWaveformProvider.from_text(text)
+    keep = ["tb.dut.clk", "tb.dut.rst_n", "tb.dut.?ptr", "tb.**.full", "tb.dut.empty", "tb.dut.out_*"]
+    kept = VcdWaveformProvider(parse_vcd(text, keep=keep))
+    paths = [
+        "tb.dut.clk", "tb.dut.rst_n", "tb.dut.out_valid", "tb.dut.out_ready", "tb.dut.out_data",
+        "tb.dut.full", "tb.dut.empty", "tb.dut.wptr", "tb.dut.rptr",
+    ]
+    assert_kept_signals_unchanged(full, kept, paths)
+    for path in paths:
+        for time_ps in range(0, 100001, 2500):
+            for phase in (BEFORE, SETTLED):
+                assert kept.get_value_at(path, time_ps, phase=phase) == full.get_value_at(path, time_ps, phase=phase)
+    for edge in ClockEdge:
+        assert kept.get_clock_edges("tb.dut.clk", 0, 100001, edge=edge) == full.get_clock_edges(
+            "tb.dut.clk", 0, 100001, edge=edge
+        )
+    for absent in ("tb.dut.in_data", "tb.dut.in_valid", "tb.dut.push", "tb.dut.pop"):
+        with pytest.raises(SignalNotFoundError):
+            kept.get_value_at(absent, 0)
+        with pytest.raises(SignalNotFoundError):
+            kept.get_signal_decl(absent)
+
+    # The golden comparison only needs the kept signals and is unchanged by filtering.
+    assert compare(kept, fixture.golden) == compare(full, fixture.golden)
+    # A golden signal left out of keep is reported as missing, never guessed.
+    narrow = VcdWaveformProvider(parse_vcd(text, keep=["tb.dut.clk", "tb.dut.rst_n"]))
+    missing = compare(narrow, fixture.golden)
+    assert (missing.status, codes_of(missing)) == (AnalysisStatus.INVALID_INPUT, ["SIGNAL_NOT_FOUND"])
+
+
+def test_keep_none_is_the_unfiltered_parse_and_keep_everything_is_identical(fixture: MockFixture) -> None:
+    text = vcd_from_mock(fixture.trace)
+    assert parse_vcd(text, keep=None) == parse_vcd(text)
+    assert parse_vcd(text, keep=["**"]) == parse_vcd(text)
+
+
+def test_keep_retains_an_identifier_code_shared_with_an_unkept_alias() -> None:
+    text = """$timescale 1ps $end
+$scope module top $end
+$var wire 4 ! bus [3:0] $end
+$var wire 1 # other $end
+$scope module u $end
+$var wire 4 ! port [3:0] $end
+$upscope $end
+$upscope $end
+$enddefinitions $end
+#0
+b1010 !
+0#
+#5
+b0x01 !
+1#
+#9
+"""
+    full = VcdWaveformProvider.from_text(text)
+    kept = VcdWaveformProvider(parse_vcd(text, keep=["top.u.port"]))
+    assert kept.trace.signal_paths == ("top.u.port",)
+    for time_ps in range(10):
+        assert kept.get_value_at("top.u.port", time_ps) == full.get_value_at("top.bus", time_ps)
+    for absent in ("top.bus", "top.other"):
+        with pytest.raises(SignalNotFoundError):
+            kept.get_value_at(absent, 5)
+    both = VcdWaveformProvider(parse_vcd(text, keep=["top.bus", "top.**.port"]))
+    assert both.trace.signal_paths == ("top.bus", "top.u.port")
+    assert both.trace._series_by_path["top.bus"] is both.trace._series_by_path["top.u.port"]
+
+
+def test_keep_still_validates_unselected_value_changes() -> None:
+    keep = ["top.clk"]
+    for bad in [
+        HEADER + '#0\n0!\nb111111111 "\n',  # wider than declared
+        HEADER + '#0\n0!\n1"\n',  # scalar change for a vector
+        HEADER + '#0\n0!\nb12 "\n',  # invalid digit
+        HEADER + '#0\n0!\nr1.5 "\n',  # real value for a digital signal
+        HEADER + "#0\n0!\n0?\n",  # undeclared identifier code
+    ]:
+        with pytest.raises(InvalidTraceError):
+            parse_vcd(bad)
+        with pytest.raises(InvalidTraceError):
+            parse_vcd(bad, keep=keep)
+    # A record for an unselected code before the first timestamp still sets coverage.
+    early = HEADER + 'b1 "\n#3\n1!\n#7\n'
+    assert parse_vcd(early, keep=keep).coverage == parse_vcd(early).coverage == TraceCoverage(start_ps=0, end_ps=7000)
+
+
+def test_keep_leaves_dump_gaps_unchanged_and_restate_checks_kept_signals_only() -> None:
+    full = VcdWaveformProvider.from_text(GAP_TEXT)
+    for path in ("top.data", "top.clk"):
+        kept = VcdWaveformProvider(parse_vcd(GAP_TEXT, keep=[path]))
+        assert_kept_signals_unchanged(full, kept, [path])
+        with pytest.raises(DataUnavailableError):
+            kept.get_value_at(path, 40000)
+
+    partial = HEADER + '#0\n0!\nb1 "\n#10\n$dumpoff\n$end\n#20\n$dumpon\n0!\n$end\n#30\n'
+    with pytest.raises(InvalidTraceError, match="did not restate"):
+        parse_vcd(partial)
+    with pytest.raises(InvalidTraceError, match="did not restate"):
+        parse_vcd(partial, keep=["top.data"])
+    kept_clk = VcdWaveformProvider(parse_vcd(partial, keep=["top.clk"]))
+    assert kept_clk.trace.unavailable == (TimeInterval(start_ps=10000, end_ps=20000),)
+    assert kept_clk.get_value_at("top.clk", 20000) == lv("0")
+
+
+def test_keep_preserves_same_timestamp_clock_ambiguity() -> None:
+    text = HEADER + '#0\n0!\nb0 "\n#5\n1!\n0!\n1!\nb1 "\nb10 "\n#10\n0!\n#15\n'
+    kept = VcdWaveformProvider(parse_vcd(text, keep=["top.clk"]))
+    with pytest.raises(IndeterminateClockError):
+        kept.get_clock_edges("top.clk", 0, 15001)
+    assert kept.trace._series_by_path["top.clk"] == parse_vcd(text)._series_by_path["top.clk"]
+
+
+@settings(max_examples=100, deadline=None)
+@given(
+    st.lists(
+        st.tuples(
+            st.integers(min_value=0, max_value=40),
+            st.sampled_from("abc"),
+            st.text(alphabet="01xz", min_size=1, max_size=2),
+        ),
+        min_size=1,
+        max_size=30,
+    ),
+    st.sets(st.sampled_from(["top.a", "top.u.b", "top.u.c"]), min_size=1),
+)
+def test_keep_never_changes_a_kept_signal_under_property_tests(
+    records: list[tuple[int, str, str]], kept_paths: set[str]
+) -> None:
+    lines = [
+        "$timescale 1ps $end",
+        "$scope module top $end",
+        "$var wire 2 a a [1:0] $end",
+        "$scope module u $end",
+        "$var wire 2 b b [1:0] $end",
+        "$var wire 2 c c [1:0] $end",
+        "$upscope $end",
+        "$upscope $end",
+        "$enddefinitions $end",
+    ]
+    for time, code, bits in sorted(records, key=lambda item: item[0]):
+        lines += [f"#{time}", f"b{bits} {code}"]
+    text = "\n".join(lines) + "\n"
+    full = VcdWaveformProvider.from_text(text)
+    paths = [path for path in full.trace.signal_paths if path in kept_paths]
+    kept = VcdWaveformProvider(parse_vcd(text, keep=sorted(kept_paths)))
+    assert_kept_signals_unchanged(full, kept, paths)
