@@ -49,7 +49,7 @@ def main() -> int:
     free(UI_PORT)
     artifacts = tempfile.mkdtemp(prefix="waveroot-live-")
     api = subprocess.Popen(
-        [sys.executable, "-m", "src.app.cli", "serve", "--port", str(API_PORT), "--artifacts", artifacts],
+        [sys.executable, "-m", "src.app.cli", "serve", "--port", str(API_PORT), "--artifacts", artifacts, "--dev"],
         cwd=REPO, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT,
     )
     ui = subprocess.Popen(

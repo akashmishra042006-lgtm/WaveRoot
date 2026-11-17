@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import signal
 import sys
 import threading
@@ -85,9 +86,10 @@ def _parser() -> argparse.ArgumentParser:
     serve.add_argument("--artifacts", type=Path, default=DEFAULT_ARTIFACTS)
     serve.add_argument("--host", default="127.0.0.1", help="a loopback IPv4 address")
     serve.add_argument("--port", type=int, default=8765)
-    serve.add_argument("--allow-origin", action="append", default=None, metavar="ORIGIN",
-                       help="web origin allowed to call the API, repeatable "
-                            f"(default: Vite dev/preview {', '.join(DEFAULT_DEV_ORIGINS[:2])} and :4173)")
+    serve.add_argument("--allow-origin", action="append", default=[], metavar="ORIGIN",
+                       help="extra web origin allowed to call the API; repeatable")
+    serve.add_argument("--dev", action="store_true",
+                       help="also allow the Vite dev/preview origins (" + ", ".join(DEFAULT_DEV_ORIGINS) + ")")
     serve.add_argument("--timeout", type=float, default=180.0, help="wall-clock seconds per job")
     serve.add_argument("--jobs", type=int, default=1, help="jobs that may run at once")
 
@@ -161,13 +163,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             server = ApiServer(ApiConfig(
                 root=args.root, artifacts=args.artifacts, host=args.host, port=args.port,
-                extra_origins=tuple(args.allow_origin) if args.allow_origin else DEFAULT_DEV_ORIGINS,
+                extra_origins=tuple(args.allow_origin) + (DEFAULT_DEV_ORIGINS if args.dev else ()),
                 timeout_s=args.timeout, max_concurrent=args.jobs,
             ))
         except (ValueError, OSError) as exc:
             print(f"cannot start the API: {exc}", file=sys.stderr)
             return 2
+        logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
         print(f"WaveRoot API on {server.origin}  (cases under {args.root}; Ctrl-C to stop)", flush=True)
+        print("allowed origins: " + ", ".join(sorted(server.allowed_origins())), flush=True)
         server.serve_forever()
         return 0
 

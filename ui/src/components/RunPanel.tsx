@@ -17,7 +17,7 @@ interface Props {
   onResult: (record: unknown, sources: SourceText[], problems: string[]) => void;
 }
 
-const SERVE_COMMAND = "python -m src.app.cli serve";
+const SERVE_COMMAND = "python -m src.app.cli serve --dev";
 
 /** Runs a benchmark through the local service. The service being absent is a
  * normal state: saved reports still open without it. */
@@ -38,6 +38,7 @@ export function RunPanel({ client, pollMs = 300, onResult }: Props) {
     try {
       await client.health();
       const cases = await client.cases();
+      if (!live.current) return;
       setService({ kind: "online", cases });
       const first = cases[0];
       if (first) {
@@ -45,6 +46,7 @@ export function RunPanel({ client, pollMs = 300, onResult }: Props) {
         setSchedule(first.schedules[0] ?? "");
       }
     } catch (err) {
+      if (!live.current) return;
       setService({
         kind: "offline",
         message: err instanceof ApiError ? err.message : `Unexpected error: ${String(err)}`,
@@ -65,6 +67,18 @@ export function RunPanel({ client, pollMs = 300, onResult }: Props) {
     setJob(done);
     if (done.state === "failed") {
       setError(done.message ?? "The job failed.");
+      return;
+    }
+    // A job cancelled before it started has no run record; that is not an error.
+    if (done.state === "cancelled") {
+      try {
+        const record = await client.result(done.id);
+        if (live.current) onResult(record, [], []);
+      } catch (err) {
+        if (!(err instanceof ApiError && err.status === 409) && live.current) {
+          setError(err instanceof Error ? err.message : String(err));
+        }
+      }
       return;
     }
     try {
@@ -110,7 +124,9 @@ export function RunPanel({ client, pollMs = 300, onResult }: Props) {
   const cancel = async () => {
     if (!job) return;
     try {
-      setJob(await client.cancel(job.id));
+      const reply = await client.cancel(job.id);
+      // Never step back over a newer state the poll already saw.
+      setJob((current) => (current && TERMINAL.includes(current.state) ? current : reply));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }

@@ -163,7 +163,8 @@ def test_health_and_case_list(server: ApiServer) -> None:
     assert case["case_id"] == "case_01_fifo_wrap"
     assert set(case["variants"]) == {"correct", "mutant"}
     assert "directed" in case["schedules"]
-    assert "path" not in json.dumps(body).lower()  # no server paths leak
+    text = json.dumps(body)
+    assert str(root) not in text and str(REPO) not in text and "/" not in text  # ids only, no paths
 
 
 @pytest.mark.parametrize("origin", ["https://evil.example", "http://localhost:9999", "null", "http://127.0.0.1.evil.example"])
@@ -187,9 +188,12 @@ def test_reads_without_an_origin_are_allowed(server: ApiServer) -> None:
     assert call(server, "GET", "/api/health", origin=None)[0] == 200
 
 
-@pytest.mark.parametrize("host", ["evil.example", "evil.example:80", "127.0.0.1:1", "localhost:1"])
+@pytest.mark.parametrize("host", ["evil.example", "evil.example:80", "127.0.0.1:1", "localhost:1",
+                                  "LOCALHOST", "localhost.", "127.0.0.1.", "[::1]", ""])
 def test_unexpected_host_header_is_refused(server: ApiServer, host: str) -> None:
     """DNS-rebinding guard: a name that merely resolves to 127.0.0.1 is refused."""
+    if host in ("LOCALHOST", "localhost."):
+        host = f"{host}:{server.port}"
     assert call(server, "GET", "/api/health", origin=None, host=host)[0] == 403
 
 
@@ -259,16 +263,62 @@ def test_unknown_case_is_404_and_unknown_schedule_is_400(server: ApiServer) -> N
     assert jcall(server, "POST", "/api/jobs", {**JOB, "schedule": "nonexistent"})[0] == 400
 
 
-def test_a_manifest_outside_the_root_is_never_listed_or_run(root: Path, tmp_path: Path) -> None:
-    outside = tmp_path / "elsewhere"
-    shutil.copytree(FIFO_DIR, outside / "case_01_fifo_wrap")
-    (root / "linked").symlink_to(outside / "case_01_fifo_wrap")
-    srv = make_server(root, tmp_path, FakeService())
+def _copy_case_as(dest: Path, case_id: str) -> Path:
+    shutil.copytree(FIFO_DIR, dest)
+    manifest = json.loads((dest / "manifest.json").read_text())
+    manifest["case_id"] = case_id
+    (dest / "manifest.json").write_text(json.dumps(manifest))
+    return dest
+
+
+def test_a_case_directory_outside_the_root_is_never_listed_or_run(root: Path, tmp_path: Path) -> None:
+    outside = _copy_case_as(tmp_path / "elsewhere" / "case_77_outside", "case_77_outside")
+    (root / "case_77_outside").symlink_to(outside)
+    fake = FakeService()
+    srv = make_server(root, tmp_path, fake)
     srv.start()
     try:
         ids = [c["case_id"] for c in jcall(srv, "GET", "/api/cases")[1]["cases"]]
         assert ids == ["case_01_fifo_wrap"]
-        assert jcall(srv, "POST", "/api/jobs", {**JOB, "case_id": "linked"})[0] in (400, 404)
+        assert jcall(srv, "POST", "/api/jobs", {**JOB, "case_id": "case_77_outside"})[0] == 404
+        assert fake.calls == []
+    finally:
+        srv.stop()
+
+
+def test_a_manifest_symlinked_outside_the_root_is_ignored(root: Path, tmp_path: Path) -> None:
+    outside = _copy_case_as(tmp_path / "elsewhere" / "case_78_x", "case_78_x")
+    inside = root / "case_78_x"
+    inside.mkdir()
+    (inside / "manifest.json").symlink_to(outside / "manifest.json")
+    srv = make_server(root, tmp_path, FakeService())
+    srv.start()
+    try:
+        ids = [c["case_id"] for c in jcall(srv, "GET", "/api/cases")[1]["cases"]]
+        assert "case_78_x" not in ids
+    finally:
+        srv.stop()
+
+
+def test_a_duplicate_case_id_is_not_silently_replaced(root: Path, tmp_path: Path) -> None:
+    _copy_case_as(root / "zz_copy", "case_01_fifo_wrap")
+    srv = make_server(root, tmp_path, FakeService())
+    srv.start()
+    try:
+        cases = jcall(srv, "GET", "/api/cases")[1]["cases"]
+        assert [c["case_id"] for c in cases] == ["case_01_fifo_wrap"]
+        job = create(srv)
+        assert srv.get_job(job).case_dir.name == "case_01_fifo_wrap"  # the first, sorted, directory
+    finally:
+        srv.stop()
+
+
+def test_only_the_servers_own_origin_is_trusted_by_default(root: Path, tmp_path: Path) -> None:
+    srv = ApiServer(ApiConfig(root=root, artifacts=tmp_path / "a"), service_factory=lambda _c: FakeService())
+    assert srv.allowed_origins() == {f"http://127.0.0.1:{srv.port}", f"http://localhost:{srv.port}"}
+    srv.start()
+    try:
+        assert call(srv, "GET", "/api/cases", origin="http://localhost:5173")[0] == 403
     finally:
         srv.stop()
 
@@ -343,7 +393,9 @@ def test_a_queued_job_can_be_cancelled_before_it_starts(root: Path, tmp_path: Pa
         srv.stop()
 
 
-def test_an_internal_failure_is_reported_without_leaking_details(root: Path, tmp_path: Path) -> None:
+def test_an_internal_failure_is_reported_without_leaking_details(
+    root: Path, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     class Boom(FakeService):
         def analyze(self, *a: Any, **k: Any) -> AnalysisOutcome:
             raise RuntimeError(f"secret path {root}")
@@ -356,6 +408,7 @@ def test_an_internal_failure_is_reported_without_leaking_details(root: Path, tmp
         assert state["state"] == "failed"
         assert str(root) not in json.dumps(state)
         assert jcall(srv, "GET", f"/api/jobs/{job}/result")[0] == 409
+        assert any("secret path" in r.exc_text for r in caplog.records if r.exc_text)  # logged server-side
     finally:
         srv.stop()
 
@@ -379,11 +432,13 @@ def test_stopping_the_server_cancels_running_jobs(root: Path, tmp_path: Path) ->
     fake = FakeService(block=True)
     srv = make_server(root, tmp_path, fake)
     srv.start()
-    create(srv)
+    job = create(srv)
     assert fake.started.wait(10)
     started = time.monotonic()
     srv.stop()
     assert time.monotonic() - started < 10
+    assert srv.get_job(job).cancel.is_set()
+    assert srv.get_job(job).state == "cancelled"
 
 
 # ----------------------------------------------------------------------
@@ -476,6 +531,20 @@ class TestRealJobs:
             assert failure["signal_path"] == "TOP.tb.dut.full"
             assert failure["observation"]["time_ps"] == "55000"
             assert not Path(record["run"]["run_dir"]).is_absolute()
+        finally:
+            srv.stop()
+
+    def test_serve_with_a_relative_artifacts_dir_builds(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The documented `serve` uses the relative default artifacts/runs."""
+        monkeypatch.chdir(tmp_path)
+        srv = ApiServer(ApiConfig(root=REPO / "benchmarks", artifacts=Path("artifacts/runs"), extra_origins=(ALLOWED,)))
+        srv.start()
+        try:
+            job = create(srv)
+            wait_state(srv, job, {"finished"}, timeout=240)
+            record = jcall(srv, "GET", f"/api/jobs/{job}/result")[1]
+            assert record["status"] == "fail", record["diagnostics"]
+            assert str(tmp_path) not in json.dumps(record) and str(REPO) not in json.dumps(record)
         finally:
             srv.stop()
 

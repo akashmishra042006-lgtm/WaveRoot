@@ -39,7 +39,7 @@ describe("the local service is optional", () => {
     render(<App client={client} />);
     const offline = await screen.findByTestId("service-offline");
     expect(offline).toHaveTextContent("not reachable");
-    expect(offline).toHaveTextContent("python -m src.app.cli serve");
+    expect(offline).toHaveTextContent("python -m src.app.cli serve --dev");
     await user.selectOptions(screen.getByTestId("sample-select"), "real-fifo-fail");
     expect(await screen.findByTestId("run-title")).toBeInTheDocument();
     expect(screen.getByTestId("service-offline")).toBeInTheDocument();
@@ -136,12 +136,36 @@ describe("running a benchmark", () => {
   });
 });
 
+describe("cancelling a queued job", () => {
+  it("is not reported as an error when there is no record", async () => {
+    const user = userEvent.setup();
+    let cancelled = false;
+    const client = fakeClient({
+      createJob: vi.fn().mockResolvedValue(job("queued")),
+      job: vi.fn().mockImplementation(async () => job(cancelled ? "cancelled" : "queued")),
+      cancel: vi.fn().mockImplementation(async () => { cancelled = true; return job("cancelled"); }),
+      result: vi.fn().mockRejectedValue(new ApiError("the job is cancelled; there is no result", "refused", 409, "NOT_READY")),
+    });
+    render(<App client={client} />);
+    await user.click(await screen.findByTestId("run-start"));
+    await user.click(screen.getByTestId("run-cancel"));
+    await waitFor(() => expect(screen.getByTestId("run-start")).toBeEnabled(), { timeout: 3000 });
+    expect(screen.getByTestId("run-state")).toHaveTextContent("cancelled");
+    expect(screen.queryByTestId("run-error")).toBeNull();
+  });
+});
+
 describe("the client", () => {
   const ok = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
 
-  it("maps a network failure to an offline error", async () => {
+  it("maps a network or CORS failure to an offline error that names both causes", async () => {
+    // A real browser rejects fetch the same way whether the service is down or
+    // refused this origin (403 without CORS headers).
     const client = new ApiClient("http://127.0.0.1:1", vi.fn().mockRejectedValue(new TypeError("fetch failed")));
-    await expect(client.health()).rejects.toMatchObject({ kind: "offline" });
+    const err = await client.health().catch((e: unknown) => e);
+    expect(err).toMatchObject({ kind: "offline" });
+    expect((err as Error).message).toContain("does not allow this page's origin");
+    expect((err as Error).message).toContain("--allow-origin");
   });
 
   it("surfaces the server's error code and message", async () => {

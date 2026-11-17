@@ -181,7 +181,8 @@ class Runner:
         *,
         search_path: str | None = None,
     ) -> None:
-        self.artifacts_root = artifacts_root
+        # Tools run with cwd=run_dir, so every path handed to them must be absolute.
+        self.artifacts_root = artifacts_root.resolve()
         self.limits = limits or Limits()
         self.search_path = search_path
 

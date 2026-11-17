@@ -70,7 +70,12 @@ export class ApiClient {
         cache: "no-store",
       });
     } catch {
-      throw new ApiError(`The analysis service at ${this.base} is not reachable.`, "offline");
+      // Browsers report a CORS refusal exactly like a network failure, so both are named.
+      throw new ApiError(
+        `The analysis service at ${this.base} is not reachable, or it does not allow this page's origin ` +
+          `(${typeof location === "undefined" ? "unknown" : location.origin}; start it with --dev or --allow-origin).`,
+        "offline",
+      );
     }
     if (!response.ok) {
       let message = `The service refused the request (HTTP ${response.status}).`;

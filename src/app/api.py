@@ -4,7 +4,8 @@ Standard library only. One process, bound to loopback, no authentication: the
 guards below stop *other web pages and other hosts* from driving it, not other
 programs on the same machine.
 
-* Binding: only a loopback IPv4 address is accepted.
+* Binding: only a loopback IPv4 address is accepted. No authentication: any
+  local program can use the API.
 * ``Host`` must be this server's own loopback name and port (DNS-rebinding
   guard). ``Origin``, when sent, must be this server or an allowed origin;
   creating or cancelling a job *requires* an allowed ``Origin``. Programs that
@@ -13,9 +14,14 @@ programs on the same machine.
   discovered under one configured root, and anything resolving outside it is
   ignored. Fixture mode and causal fixtures are CLI-only.
 * Request bodies are small JSON objects with exactly the documented fields.
-* Source text is served only for ids a finished job's report declares, only
-  from inside that case's directory, and only when its SHA-256 equals the
-  report's.
+* Source text is served only for ids a completed (finished or cancelled)
+  job's report declares, resolved against that case's directory (open
+  question for Dev 1/Track B: spec 12 says only "relative"), and only when
+  its SHA-256 equals the report's.
+* A cancel that arrives after the simulation finished is accepted (202) but
+  the job still ends "finished" with its real result.
+* Only this server's own origin is trusted unless more are configured
+  (``serve --dev`` adds the Vite dev/preview origins).
 * Responses are never cached, and errors never carry tracebacks or server
   paths.
 
@@ -35,6 +41,7 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import json
+import logging
 import re
 import threading
 import uuid
@@ -53,6 +60,8 @@ from src.app.service import AnalysisOutcome, AnalysisService, ManifestError, loa
 
 MAX_BODY_BYTES: Final = 4096
 MAX_SOURCE_BYTES: Final = 2_000_000
+_LOG: Final = logging.getLogger("waveroot.api")
+#: Vite dev/preview origins. Not trusted by default: ``serve --dev`` adds them.
 DEFAULT_DEV_ORIGINS: Final = (
     "http://localhost:5173", "http://127.0.0.1:5173",  # vite dev
     "http://localhost:4173", "http://127.0.0.1:4173",  # vite preview
@@ -81,7 +90,7 @@ class ApiConfig:
     artifacts: Path
     host: str = "127.0.0.1"
     port: int = 0
-    extra_origins: tuple[str, ...] = DEFAULT_DEV_ORIGINS
+    extra_origins: tuple[str, ...] = ()
     timeout_s: float = 180.0
     max_concurrent: int = 1
     max_jobs: int = 64
@@ -131,6 +140,7 @@ class ApiServer:
         _check_loopback(config.host)
         self.config = config
         self._root = config.root.resolve(strict=True)
+        self._artifacts = config.artifacts.resolve()
         self._factory: ServiceFactory = service_factory or self._default_factory
         self._jobs: dict[str, _Job] = {}
         self._lock = threading.Lock()
@@ -162,14 +172,20 @@ class ApiServer:
         self._thread.start()
 
     def stop(self) -> None:
-        with self._lock:
-            for job in self._jobs.values():
-                job.cancel.set()
-        self._pool.shutdown(wait=True, cancel_futures=True)
+        # Stop accepting requests first, so no job is created after the pool closes.
         self._http.shutdown()
         self._http.server_close()
         if self._thread is not None:
             self._thread.join(timeout=5)
+        self._cancel_all()
+
+    def _cancel_all(self) -> None:
+        with self._lock:
+            for job in self._jobs.values():
+                job.cancel.set()
+                if job.state == "queued":
+                    job.state = "cancelled"
+        self._pool.shutdown(wait=True, cancel_futures=True)
 
     def serve_forever(self) -> None:
         """Serve on the calling thread until interrupted, then cancel running jobs."""
@@ -178,11 +194,8 @@ class ApiServer:
         except KeyboardInterrupt:
             pass
         finally:
-            with self._lock:
-                for job in self._jobs.values():
-                    job.cancel.set()
-            self._pool.shutdown(wait=True, cancel_futures=True)
             self._http.server_close()
+            self._cancel_all()
 
     # -- request guards -------------------------------------------------
 
@@ -206,12 +219,18 @@ class ApiServer:
                 continue
             if not directory.is_dir() or not directory.is_relative_to(self._root):
                 continue
-            manifest_path = directory / "manifest.json"
-            if not manifest_path.is_file():
+            try:
+                manifest_path = (directory / "manifest.json").resolve(strict=True)
+            except OSError:
+                continue
+            if not manifest_path.is_file() or manifest_path.parent != directory:
                 continue
             try:
                 manifest = load_manifest(manifest_path)
             except ManifestError:
+                continue
+            if manifest.case_id in found:
+                _LOG.warning("ignoring %s: case id %s is already defined", directory.name, manifest.case_id)
                 continue
             found[manifest.case_id] = (manifest_path, manifest)
         return found
@@ -261,7 +280,11 @@ class ApiServer:
             if sum(1 for j in self._jobs.values() if j.state in _ACTIVE) >= self.config.max_jobs:
                 raise _Refusal(503, "BUSY", "too many active jobs")
             self._jobs[job.id] = job
-        self._pool.submit(self._run, job)
+            try:
+                self._pool.submit(self._run, job)
+            except RuntimeError:  # the server is shutting down
+                del self._jobs[job.id]
+                raise _Refusal(503, "SHUTTING_DOWN", "the server is stopping") from None
         return job
 
     def _evict_locked(self) -> None:
@@ -306,6 +329,7 @@ class ApiServer:
                 job.record = record
                 job.state = "cancelled" if cancelled else "finished"
         except Exception:  # noqa: BLE001 - reported as a generic failure, never leaked
+            _LOG.exception("job %s (%s %s/%s) failed", job.id, job.case_id, job.variant, job.schedule)
             with self._lock:
                 job.state = "failed"
 
@@ -314,7 +338,8 @@ class ApiServer:
         run = record.get("run")
         if isinstance(run, dict) and run.get("run_dir"):
             run["run_dir"] = Path(str(run["run_dir"])).name
-        prefixes = [str(self.config.artifacts.resolve()), str(self._root), str(self.config.artifacts)]
+        repo = Path(__file__).resolve().parents[2]
+        prefixes = sorted({str(self._artifacts), str(self._root), str(repo)}, key=len, reverse=True)
 
         def clean(value: Any) -> Any:
             if isinstance(value, str):
@@ -340,18 +365,19 @@ class ApiServer:
             raise _Refusal(404, "UNKNOWN_SOURCE", "the report declares no such source")
         try:
             path = resolve_inside(job.case_dir, Path(str(entry["path"])))
-            if path.stat().st_size > MAX_SOURCE_BYTES:
-                raise PathEscapeError("too large")
-            data = path.read_bytes()
+            with path.open("rb") as handle:
+                data = handle.read(MAX_SOURCE_BYTES + 1)
         except (PathEscapeError, OSError):
             raise _Refusal(404, "SOURCE_UNAVAILABLE", "the source file is not available") from None
+        if len(data) > MAX_SOURCE_BYTES:
+            raise _Refusal(413, "SOURCE_TOO_LARGE", "the source file is too large to serve")
         if hashlib.sha256(data).hexdigest() != entry.get("sha256"):
             raise _Refusal(409, "SOURCE_HASH_MISMATCH", "the file no longer matches the report's SHA-256")
         return data
 
     def _default_factory(self, comparison: str) -> _Service:
         adapter = WaveformComparison() if comparison == "track-a" else SelfCheckComparison()
-        runner = Runner(self.config.artifacts, Limits(wall_clock_s=self.config.timeout_s))
+        runner = Runner(self._artifacts, Limits(wall_clock_s=self.config.timeout_s))
         return AnalysisService(runner, adapter)
 
 
@@ -359,6 +385,7 @@ class _Handler(BaseHTTPRequestHandler):
     server_api: ApiServer
     server_version = "WaveRootAPI"
     sys_version = ""
+    timeout = 10  # seconds per socket read: a stalled client cannot hold a thread
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002 - quiet by default
         return
