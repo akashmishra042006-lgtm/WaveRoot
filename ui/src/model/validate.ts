@@ -465,6 +465,10 @@ function loadRunRecord(o: Obj): Loaded {
     fail("run record", "synthetic causal data in a record not marked fixture_mode");
   }
   const adapter = object(o.comparison_adapter, "run record.comparison_adapter", ["name", "kind"]);
+  if (o.causal_adapter !== null) {
+    const causalAdapter = object(o.causal_adapter, "run record.causal_adapter", ["name", "kind"]);
+    oneOf(causalAdapter.kind, ADAPTER_KINDS, "run record.causal_adapter.kind");
+  }
   const failure = primaryMode ? comparisons[primaryMode]?.failure ?? null : null;
   if (report?.failure && failure && !sameFailure(report.failure, failure)) {
     fail("run record", "causal report and comparison disagree about the failure");
@@ -482,7 +486,7 @@ function loadRunRecord(o: Obj): Loaded {
     report,
     diagnostics: diagnostics(o.diagnostics, "run record.diagnostics"),
     run: runMeta(o.run),
-    comparisonKind: str(adapter.kind, "comparison_adapter.kind"),
+    comparisonKind: oneOf(adapter.kind, ADAPTER_KINDS, "run record.comparison_adapter.kind"),
     raw: o,
   };
 }
@@ -513,6 +517,8 @@ function fromReport(report: CausalReport, kind: Loaded["kind"], raw: unknown, co
 }
 
 /** Parse and validate any supported document. Throws ValidationError. */
+const ADAPTER_KINDS = ["analysis", "benchmark_self_check", "synthetic_fixture"] as const;
+
 export function loadDocument(value: unknown): Loaded {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new ValidationError("The file is not a WaveRoot report: expected a JSON object.");

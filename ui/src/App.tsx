@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useReducer, useRef, useState, type ChangeEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { Assertions, SourceView, Suspects } from "./components/Evidence";
+import { ApiClient, apiBaseFromLocation } from "./api/client";
 import { Graph } from "./components/Graph";
+import { RunPanel } from "./components/RunPanel";
 import { FailureStrip, Header, OutcomePanel, Unlocalized } from "./components/Summary";
 import { Waveform } from "./components/Waveform";
 import { useMediaQuery } from "./components/common";
@@ -58,7 +60,11 @@ const TABS = [
 ] as const;
 type TabId = (typeof TABS)[number]["id"];
 
-export function App() {
+export function App({ client }: { client?: ApiClient } = {}) {
+  const api = useMemo(
+    () => client ?? new ApiClient(apiBaseFromLocation(typeof window === "undefined" ? "" : window.location.search)),
+    [client],
+  );
   const [state, dispatch] = useReducer(appReducer, { doc: null, sel: initialSelection(null), view: { kind: "empty" } });
   const [sources, setSources] = useState<SourceText[]>([]);
   const [notice, setNotice] = useState("");
@@ -88,6 +94,12 @@ export function App() {
       dispatch({ type: "view", view: { kind: "error", message } });
     }
   }, []);
+
+  const onApiResult = useCallback((record: unknown, texts: SourceText[], problems: string[]) => {
+    setSources((prev) => [...prev.filter((p) => !texts.some((t) => t.sha256 === p.sha256)), ...texts]);
+    openDocument(record);
+    if (problems.length > 0) setNotice(`Some sources could not be loaded: ${problems.join("; ")}`);
+  }, [openDocument]);
 
   const onFile = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -181,6 +193,7 @@ export function App() {
       </Header>
 
       <main>
+        <RunPanel client={api} onResult={onApiResult} />
         {view.kind === "empty" && (
           <section className="empty-state" data-testid="empty-state">
             <h1>Open a saved WaveRoot report</h1>

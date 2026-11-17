@@ -167,3 +167,13 @@ it("leaves a visible gap rather than holding a known value across dumpoff", asyn
   const wave = {start_ps:0n,end_ps:10n,signals:[signal],unavailable:[{start_ps:3n,end_ps:8n}]};
   expect(segments(wave,signal,{start:0n,end:10n},0n).map(s=>[s.start,s.end,s.value?.bits??null])).toEqual([[0n,3n,"1"],[3n,8n,null],[8n,10n,"1"]]);
 });
+describe("run record adapter kinds", () => {
+  it("rejects an unknown comparison kind instead of showing it unlabeled", async () => {
+    const { loadDocument } = await import("../model/validate");
+    const { SAMPLES } = await import("../samples");
+    const real = structuredClone(SAMPLES.find((x) => x.id === "real-fifo-fail")!.document) as Record<string, any>;
+    expect(() => loadDocument(real)).not.toThrow();
+    real.comparison_adapter.kind = "made_up";
+    expect(() => loadDocument(real)).toThrow(/comparison_adapter.kind/);
+  });
+});

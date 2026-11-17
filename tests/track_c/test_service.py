@@ -24,6 +24,7 @@ from src.app.service import (
 from src.contracts import (
     AnalysisStatus,
     ComparisonMode,
+    ComparisonResult,
     FailureAnchor,
     FailureKind,
     LogicValue,
@@ -289,3 +290,49 @@ class TestCliEndToEnd:
         assert record["causal_adapter"]["kind"] == "synthetic_fixture"
         assert record["causal"] is None
         assert [d["code"] for d in record["diagnostics"]] == ["CAUSAL_FAILED"]
+
+
+# ----------------------------------------------------------------------
+# Cancellation during the comparison step (post-merge review of #17)
+# ----------------------------------------------------------------------
+
+
+def test_cancel_during_comparison_stops_before_any_verdict(tmp_path: Path) -> None:
+    """A cancel that arrives while a mode is being compared must not be
+    reported as pass or fail: the run stops as error/CANCELLED."""
+    import threading
+
+    cancel = threading.Event()
+
+    class SlowComparison:
+        name = "slow"
+        kind = "analysis"
+        calls = 0
+
+        def compare(self, golden: object, run: RunRecord) -> ComparisonResult:
+            SlowComparison.calls += 1
+            cancel.set()  # Ctrl-C lands while this mode is being compared
+            mode = golden.header.mode  # type: ignore[attr-defined]
+            return ComparisonResult(schema_version=1, status=AnalysisStatus.PASS, mode=mode,
+                                    failure=None, compared_values=3)
+
+    runner = StubRunner(tmp_path, RunStatus.OK)
+    svc = AnalysisService(runner, SlowComparison())  # type: ignore[arg-type]
+    outcome = svc.analyze(FIFO_MANIFEST, variant="correct", schedule="directed", cancel=cancel)
+    assert outcome.status is AnalysisStatus.ERROR
+    assert [d.code for d in outcome.diagnostics] == ["CANCELLED"]
+    assert outcome.comparisons == {}
+    assert outcome.exit_code == 2
+    assert SlowComparison.calls == 1  # the second mode was never compared
+
+
+def test_saved_record_rejects_an_unknown_adapter_kind(tmp_path: Path) -> None:
+    runner = StubRunner(tmp_path, RunStatus.TOOL_MISSING)
+    outcome = service(runner).analyze(FIFO_MANIFEST, variant="correct", schedule="directed")
+    assert outcome.report_path is not None
+    data = json.loads(outcome.report_path.read_text())
+    load_report(outcome.report_path)
+    data["comparison_adapter"]["kind"] = "made_up"
+    outcome.report_path.write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="comparison_adapter.kind"):
+        load_report(outcome.report_path)

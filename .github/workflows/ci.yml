@@ -60,6 +60,20 @@ jobs:
         run: uv sync --locked
       - name: Integration tests (real simulator runs)
         run: uv run pytest -m integration -q --durations=10
+      - uses: actions/setup-node@v4
+        if: hashFiles('ui/scripts/live_check.py') != ''
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: UI against the real API and simulator (Chrome)
+        if: hashFiles('ui/scripts/live_check.py') != ''
+        run: |
+          npm --prefix ui ci
+          npm --prefix ui run build
+          uv run --with "playwright==${PLAYWRIGHT_VERSION}" python ui/scripts/live_check.py
+        env:
+          PLAYWRIGHT_VERSION: "1.65.2"
 
   ui:
     name: UI · tests, build, layout check
@@ -91,7 +105,7 @@ jobs:
         # Fails on page-level horizontal overflow, overlapping controls, or
         # page errors. Latency numbers are printed for information only:
         # shared runners are too noisy to gate on them.
-        run: uv run --with playwright python ui/scripts/visual_check.py ui-visual
+        run: uv run --with "playwright==1.65.2" python ui/scripts/visual_check.py ui-visual
       - name: Upload screenshots
         if: always() && steps.detect.outputs.present == 'true'
         uses: actions/upload-artifact@v4

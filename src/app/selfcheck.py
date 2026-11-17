@@ -10,8 +10,10 @@ unchanged when Track A's provider is swapped in.
 Rules implemented (spec.md; the stricter reset rules follow PR #8 rulings and
 are compatible with the merged text):
 
-* Epochs and cycles from pre-edge reset (section 7). An ``x``/``z`` reset at a
-  sampling edge is ``inconclusive``.
+* Epochs and cycles from pre-edge reset (section 7). Comparison runs in time
+  order: an ``x``/``z`` reset stops it as ``inconclusive`` (``RESET_UNKNOWN``)
+  only if no verdict was reached before that edge. An ``x``/``z`` reset before
+  reset is first asserted is ignored, as in Track A's engine.
 * Expectations of an epoch that a reset ends before they are observed are
   cancelled but not waived: ``inconclusive`` (``EPOCH_ENDED_EARLY`` in cycle
   mode, ``EXPECTATIONS_CANCELLED_BY_RESET`` in handshake mode).
@@ -70,7 +72,11 @@ class EpochMap:
     edges: list[MappedEdge] = field(default_factory=list)
     # epoch -> time of the reset-active edge that ended it
     ended_at: dict[int, int] = field(default_factory=dict)
+    # Set when no epoch could be mapped at all.
     diagnostic: Diagnostic | None = None
+    # An x/z reset after reset was first asserted: mapping stops at that edge
+    # and the checkers report it only if they reach it without a verdict.
+    unknown_reset: Diagnostic | None = None
 
 
 def _bits_field(obj: object, where: str) -> dict[str, str]:
@@ -131,11 +137,13 @@ def map_epochs(edges: Sequence[ObservedEdge], reset_name: str, reset_active: str
     for e in edges:
         r = e.pre.get(reset_name)
         if r is None or r not in ("0", "1"):
-            result.diagnostic = Diagnostic(
+            if not seen_active and r is not None:
+                continue  # not yet in reset: nothing to compare, nothing lost
+            result.unknown_reset = Diagnostic(
                 code="RESET_UNKNOWN",
                 message=f"reset {reset_name} is {r!r} before the edge at {e.time_ps} ps",
             )
-            return result
+            break
         if r == reset_active:
             if in_epoch:
                 result.ended_at[epoch] = e.time_ps
@@ -152,7 +160,9 @@ def map_epochs(edges: Sequence[ObservedEdge], reset_name: str, reset_active: str
             cycle += 1
         result.edges.append(MappedEdge(epoch=epoch, cycle=cycle, edge=e))
     if epoch < 0:
-        result.diagnostic = Diagnostic(code="NO_EPOCH", message="reset release never observed")
+        result.diagnostic = result.unknown_reset or Diagnostic(
+            code="NO_EPOCH", message="reset release never observed"
+        )
     return result
 
 
@@ -212,6 +222,9 @@ def check_cycle(golden: GoldenTrace, edges: Sequence[ObservedEdge]) -> Compariso
                     f"reset at {emap.ended_at[rec.epoch]} ps ended epoch {rec.epoch} "
                     f"before cycle {rec.index} was observed",
                 )
+            if emap.unknown_reset is not None:
+                u = emap.unknown_reset
+                return _non_verdict(AnalysisStatus.INCONCLUSIVE, mode, u.code, u.message)
             return _non_verdict(
                 AnalysisStatus.INCONCLUSIVE, mode, "COVERAGE",
                 f"epoch {rec.epoch} cycle {rec.index} is not in the observed samples",
@@ -341,7 +354,11 @@ def check_handshake(golden: GoldenTrace, edges: Sequence[ObservedEdge]) -> Compa
         early = cancelled(current_epoch)
         if early is not None:
             return early
-    if any(pending.values()) or (header.deadline_cycle is not None and not deadline_seen):
+    unfinished = any(pending.values()) or (header.deadline_cycle is not None and not deadline_seen)
+    if unfinished and emap.unknown_reset is not None:
+        u = emap.unknown_reset
+        return _non_verdict(AnalysisStatus.INCONCLUSIVE, mode, u.code, u.message)
+    if unfinished:
         return _non_verdict(
             AnalysisStatus.INCONCLUSIVE, mode, "COVERAGE",
             "the observed samples end before the deadline with expectations outstanding"

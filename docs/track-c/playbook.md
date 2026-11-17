@@ -128,7 +128,7 @@ Each of these was a real defect or near miss. Do not relearn them.
 - The UI then shows a real graph; source text comes from "Add source files"
   until C06 serves it.
 
-### C06: local API
+### C06: local API (backend + UI adapter done; see handoff)
 
 - One process wrapping `AnalysisService`; bind to `127.0.0.1` only; strict
   `Origin` check; manifests restricted to a configured benchmarks root (today
