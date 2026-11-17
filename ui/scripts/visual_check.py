@@ -20,6 +20,7 @@ import os
 import platform
 import statistics
 import sys
+from typing import Any
 import threading
 from pathlib import Path
 
@@ -84,6 +85,16 @@ def large_report(path: Path) -> None:
     path.write_text(json.dumps(mock))
 
 
+def overlaps_at_rest(page: Any) -> list[str]:
+    """Overlapping controls, measured with the page scrolled to the top.
+
+    The header is sticky, so once the page has scrolled (selecting a suspect
+    scrolls it) the header necessarily covers whatever is beneath it; that is
+    scrolling, not a layout defect. At scroll 0 nothing may overlap."""
+    page.evaluate("window.scrollTo(0, 0)")
+    return list(page.evaluate(OVERLAP_JS))
+
+
 def main(out: Path) -> int:
     out.mkdir(parents=True, exist_ok=True)
     server = serve()
@@ -122,14 +133,14 @@ def main(out: Path) -> int:
                     "(lines) => lines.filter(l => !l.textContent.trim()).every(l => l.textContent === ' ' && l.getBoundingClientRect().height > 10)")
             page.screenshot(path=str(out / f"fifo-{width}.png"), full_page=True)
             page_scroll = page.evaluate("document.documentElement.scrollWidth - window.innerWidth")
-            overlaps = page.evaluate(OVERLAP_JS)
+            overlaps = overlaps_at_rest(page)
             wave_confined = None
             if width <= 700:
                 page.get_by_role("tab", name="Waveforms").click()
                 page.wait_for_timeout(100)
                 page.screenshot(path=str(out / f"fifo-{width}-waveforms.png"), full_page=True)
                 page_scroll = max(page_scroll, page.evaluate("document.documentElement.scrollWidth - window.innerWidth"))
-                overlaps += page.evaluate(OVERLAP_JS)
+                overlaps += overlaps_at_rest(page)
             wave_confined = page.evaluate(
                 "(() => { const w = document.querySelector('.wave-scroll'); return w ? w.scrollWidth >= w.clientWidth : null; })()")
             ok = page_scroll <= 0 and not overlaps and not errors
