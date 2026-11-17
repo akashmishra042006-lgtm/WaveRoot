@@ -1,0 +1,27 @@
+{
+  "schema_version": "track-c-proposal-0.1",
+  "provenance": {
+    "kind": "synthetic_fixture",
+    "case_id": "unsupported_example",
+    "note": "Hand-authored UI contract example. Not simulator output or localization evidence."
+  },
+  "status": "unsupported",
+  "failure": null,
+  "nodes": [],
+  "edges": [],
+  "suspects": [],
+  "waveform": {
+    "tick_unit": "ps",
+    "start_tick": "0",
+    "end_tick": "100000",
+    "signals": []
+  },
+  "sources": [],
+  "assertions": [],
+  "diagnostics": [
+    {
+      "code": "MULTIPLE_CLOCKS",
+      "message": "This example exceeds the declared single-clock analysis subset."
+    }
+  ]
+}

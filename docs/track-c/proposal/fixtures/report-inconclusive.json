@@ -1,0 +1,35 @@
+{
+  "schema_version": "track-c-proposal-0.1",
+  "provenance": {
+    "kind": "synthetic_fixture",
+    "case_id": "missing_internal_signal",
+    "note": "Hand-authored UI contract example. Not simulator output or localization evidence."
+  },
+  "status": "inconclusive",
+  "failure": null,
+  "nodes": [],
+  "edges": [],
+  "suspects": [],
+  "waveform": {
+    "tick_unit": "ps",
+    "start_tick": "0",
+    "end_tick": "100000",
+    "signals": [
+      {
+        "id": "tb.dut.hidden",
+        "width": 1,
+        "availability": "missing",
+        "initial": null,
+        "transitions": []
+      }
+    ]
+  },
+  "sources": [],
+  "assertions": [],
+  "diagnostics": [
+    {
+      "code": "MISSING_SIGNAL",
+      "message": "Required internal signal was not dumped; analysis cannot complete."
+    }
+  ]
+}

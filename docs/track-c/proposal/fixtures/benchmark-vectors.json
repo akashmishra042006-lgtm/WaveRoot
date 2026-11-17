@@ -1,0 +1,238 @@
+{
+  "status": "directed specification vectors; not observed simulation data",
+  "fifo": {
+    "inputs": [
+      {
+        "valid": 1,
+        "data": 17,
+        "ready": 0
+      },
+      {
+        "valid": 1,
+        "data": 34,
+        "ready": 0
+      },
+      {
+        "valid": 1,
+        "data": 51,
+        "ready": 0
+      },
+      {
+        "valid": 1,
+        "data": 68,
+        "ready": 0
+      },
+      {
+        "valid": 1,
+        "data": 85,
+        "ready": 1
+      },
+      {
+        "valid": 0,
+        "data": 0,
+        "ready": 1
+      },
+      {
+        "valid": 0,
+        "data": 0,
+        "ready": 1
+      },
+      {
+        "valid": 0,
+        "data": 0,
+        "ready": 1
+      },
+      {
+        "valid": 0,
+        "data": 0,
+        "ready": 1
+      }
+    ],
+    "expected_occupancy": [
+      1,
+      2,
+      3,
+      4,
+      4,
+      3,
+      2,
+      1,
+      0
+    ],
+    "expected_transfers": [
+      17,
+      34,
+      51,
+      68,
+      85
+    ],
+    "first_mutant_mismatch": {
+      "cycle": 3,
+      "signal": "full",
+      "expected": 1,
+      "actual": 0
+    }
+  },
+  "elastic": {
+    "inputs": [
+      {
+        "valid": 1,
+        "data": 161,
+        "ready": 1
+      },
+      {
+        "valid": 1,
+        "data": 178,
+        "ready": 0
+      },
+      {
+        "valid": 1,
+        "data": 178,
+        "ready": 1
+      },
+      {
+        "valid": 1,
+        "data": 195,
+        "ready": 1
+      },
+      {
+        "valid": 0,
+        "data": 0,
+        "ready": 1
+      }
+    ],
+    "expected_post_valid": [
+      1,
+      1,
+      1,
+      1,
+      0
+    ],
+    "expected_post_data": [
+      161,
+      161,
+      178,
+      195,
+      null
+    ],
+    "expected_transfers": [
+      161,
+      178,
+      195
+    ],
+    "first_mutant_mismatch": {
+      "cycle": 1,
+      "signal": "m_valid",
+      "expected": 1,
+      "actual": 0
+    }
+  },
+  "mac": {
+    "inputs": [
+      {
+        "valid": 1,
+        "a": -128,
+        "b": 125
+      },
+      {
+        "valid": 1,
+        "a": -128,
+        "b": 125
+      },
+      {
+        "valid": 1,
+        "a": -128,
+        "b": 125
+      },
+      {
+        "valid": 0,
+        "a": 0,
+        "b": 0
+      },
+      {
+        "valid": 0,
+        "a": 0,
+        "b": 0
+      }
+    ],
+    "expected_acc": [
+      -16000,
+      -32000,
+      -32768,
+      -32768,
+      -32768
+    ],
+    "expected_outputs": [
+      null,
+      -16000,
+      -32000,
+      -32768,
+      null
+    ],
+    "first_mutant_mismatch": {
+      "cycle": 3,
+      "signal": "out_data",
+      "expected": -32768,
+      "actual": 17536
+    }
+  },
+  "xprop": {
+    "inputs": [
+      {
+        "valid": 1,
+        "a": 0,
+        "b": 255,
+        "cfg_we": 0,
+        "cfg_sel": 0
+      },
+      {
+        "valid": 1,
+        "a": 90,
+        "b": 90,
+        "cfg_we": 0,
+        "cfg_sel": 0
+      },
+      {
+        "valid": 0,
+        "a": 0,
+        "b": 0,
+        "cfg_we": 1,
+        "cfg_sel": 1
+      },
+      {
+        "valid": 1,
+        "a": 18,
+        "b": 52,
+        "cfg_we": 0,
+        "cfg_sel": 0
+      },
+      {
+        "valid": 0,
+        "a": 0,
+        "b": 0,
+        "cfg_we": 0,
+        "cfg_sel": 0
+      }
+    ],
+    "expected_outputs": [
+      "00000000",
+      "01011010",
+      null,
+      "00110100",
+      null
+    ],
+    "expected_mutant_outputs": [
+      "xxxxxxxx",
+      "01011010",
+      null,
+      "00110100",
+      null
+    ],
+    "first_mutant_mismatch": {
+      "cycle": 0,
+      "signal": "out_data",
+      "expected": "00000000",
+      "actual": "xxxxxxxx"
+    }
+  }
+}

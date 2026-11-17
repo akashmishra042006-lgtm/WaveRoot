@@ -1,0 +1,53 @@
+{
+  "schema_version": "track-c-proposal-0.1",
+  "provenance": {
+    "kind": "synthetic_fixture",
+    "case_id": "missing_final_transaction",
+    "note": "Hand-authored UI contract example. Not simulator output or localization evidence."
+  },
+  "status": "fail",
+  "failure": {
+    "kind": "missing_transaction",
+    "signal_id": "tb.dut.out_data",
+    "observation": {
+      "epoch": 0,
+      "cycle": 8,
+      "phase": "post_settle",
+      "time_tick": "85001"
+    },
+    "expected": {
+      "width": 8,
+      "bits": "01010101"
+    },
+    "actual": null,
+    "explanation": "Drain deadline expired with expected transaction 0x55 still pending. No actual transfer value exists."
+  },
+  "nodes": [],
+  "edges": [],
+  "suspects": [],
+  "waveform": {
+    "tick_unit": "ps",
+    "start_tick": "0",
+    "end_tick": "100000",
+    "signals": [
+      {
+        "id": "tb.dut.out_data",
+        "width": 8,
+        "availability": "available",
+        "initial": {
+          "width": 8,
+          "bits": "01000100"
+        },
+        "transitions": []
+      }
+    ]
+  },
+  "sources": [],
+  "assertions": [],
+  "diagnostics": [
+    {
+      "code": "UNLOCALIZED_FAILURE",
+      "message": "Missing final transaction is detected; no localization result is available."
+    }
+  ]
+}
