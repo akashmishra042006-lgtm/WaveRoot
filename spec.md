@@ -1,7 +1,7 @@
 # WaveRoot shared specification
 
-Schema version 1. Status: proposed foundation, pending review by all three
-tracks. `src/contracts.py` implements the types named here; where this document
+Schema version 1. Status: decided by the contracts coordinator (Dev 1). Changes
+from here go through the process in section 2. `src/contracts.py` implements the types named here; where this document
 and the code disagree, that is a bug in one of them and must be fixed in both.
 
 This specification reconciles `docs/brief_track_a.md`, `docs/brief_track_b.md`,
@@ -491,10 +491,11 @@ literal X propagation.
 | Assertions | — | Templates | Optional, with validation status | Optional `CandidateAssertion` with status. |
 | Source in report | — | File and line | Embedded content plus hash | Path plus hash. Track C serves text by source id. |
 
-### 15.1 Decisions that need explicit sign-off
+### 15.1 Decisions with cross-track impact
 
-These change behavior for more than one track. They are implemented as
-described and should be confirmed or contested in review:
+These change behavior for more than one track. They are final for schema 1. A
+track that finds one unworkable during implementation raises it through the
+change process in section 2 rather than working around it locally:
 
 1. Observations use the clock edge time with a phase, not edge ±1 ps.
 2. Timestamps are decimal strings in JSON.

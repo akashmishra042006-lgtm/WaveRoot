@@ -53,8 +53,8 @@ These settings do not select or pin subagent models.
 
 ## Next handoff
 
-1. All three developers review [spec.md](spec.md), especially the decisions
-   listed in section 15.1, and the shared-contracts pull request.
+1. All three developers read [spec.md](spec.md), especially the cross-track
+   decisions in section 15.1, which are final for schema 1.
 2. After it merges, each track branches from the same `main` and builds against
    `src/contracts.py`. Tracks B and C can start immediately using
    `MockWaveformProvider` and `tests/fixtures/mock_fifo_failure.json`.
