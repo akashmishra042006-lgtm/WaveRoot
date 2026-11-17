@@ -199,15 +199,20 @@ class _Node:
 
 
 def _is_forward(expr: ir.Expr) -> bool:
-    """True when ``expr`` only passes a signal on: the signal or a constant select of it.
+    """True when ``expr`` only passes one source on unchanged.
 
-    A conversion that changes width, or turns x/z into 0, computes a new value
-    and is not a forward; one that only changes signedness is.
+    That is a signal or a select of it (constant or run-time). A conversion
+    that changes width, or turns x/z into 0, computes a new value and is not a
+    forward; one that only changes signedness is. A ``?:`` chooses between
+    sources and is not a forward.
     """
-    while isinstance(expr, (ir.Convert, ir.PartSelect)):
-        if isinstance(expr, ir.Convert) and (expr.two_state or expr.width != expr.operand.width):
-            return False
-        expr = expr.operand if isinstance(expr, ir.Convert) else expr.value
+    while isinstance(expr, (ir.Convert, ir.PartSelect, ir.IndexedSelect)):
+        if isinstance(expr, ir.Convert):
+            if expr.two_state or expr.width != expr.operand.width:
+                return False
+            expr = expr.operand
+        else:
+            expr = expr.value
     return isinstance(expr, ir.SignalRef)
 
 

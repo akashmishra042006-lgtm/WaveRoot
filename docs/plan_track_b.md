@@ -58,7 +58,8 @@ are only module inputs and reset-boundary state, so ranking leaves alone could
 never name a faulty assignment. Every reached node is therefore a candidate,
 candidates collapse to one per source location, and the order is: RTL
 statements that compute a value, then statements that only forward one (the
-right-hand side is a signal or a constant select of it), then slice ends;
+right-hand side is a signal or a constant or run-time select of it), then
+slice ends;
 fewer storage boundaries from the failure; state-changing register write or
 unreset register, then combinational logic, then a write that changed
 nothing, then a hold; fewer hops; a node reached through a control edge before
