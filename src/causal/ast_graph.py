@@ -306,6 +306,24 @@ class _Timing:
     clock: ClockSpec | None
     unsupported: str | None
     caveat: str | None
+    # Signals named by an explicit level-sensitive event list such as ``@(a or b)``.
+    sensitivity: frozenset[str] | None = None
+
+
+def _process_reads(assigns: Sequence[GuardedAssign]) -> set[str]:
+    """Signals a process reads that it does not itself write.
+
+    A signal the process writes and then reads takes the value just written, so
+    it does not have to be in the event list.
+    """
+    read: set[str] = set()
+    for assign in assigns:
+        operands = [assign.rhs, *assign.index_operands]
+        for guard in assign.guards:
+            operands.extend(ir.guard_operands(guard))
+        for operand in operands:
+            read.update(ir.signals_of(operand))
+    return read - {assign.target for assign in assigns}
 
 
 def _svint_bits(value: pyslang.SVInt) -> str:
@@ -348,6 +366,8 @@ class _Lowerer:
         self._lvalue: ir.Expr | None = None
         # Set when the process being lowered contains an intra-assignment delay.
         self._delayed = False
+        # Name of a user-defined subroutine the process being lowered calls, if any.
+        self._called: str | None = None
 
     # ---- top level ------------------------------------------------------
 
@@ -461,6 +481,7 @@ class _Lowerer:
         assigns: list[GuardedAssign] = []
         assignment = symbol.assignment
         span = self._span(assignment.sourceRange)
+        self._called = None
         if isinstance(assignment, ast.AssignmentExpression):
             self._lower_assignment(assignment, (), assigns, span)
         else:
@@ -468,7 +489,7 @@ class _Lowerer:
                 "UNSUPPORTED_STATEMENT",
                 f"continuous assignment at {self._where(symbol.location)} is not an assignment.",
             )
-        unsupported = None
+        unsupported = self._call_reason()
         if symbol.delay is not None:
             unsupported = "delayed continuous assignment (delays are outside the MVP)"
         self._add_drivers(
@@ -487,6 +508,7 @@ class _Lowerer:
         if initializer is None or info is None:
             return
         span = self._span(initializer.sourceRange) or info.span
+        self._called = None
         rhs = self._lower(initializer)
         assign = GuardedAssign(
             target=symbol.name,
@@ -499,7 +521,13 @@ class _Lowerer:
             text=f"{symbol.name} = {self._text(initializer.sourceRange) or ir.to_sv(rhs)}",
         )
         self._add_drivers(
-            [assign], EdgeType.COMBINATIONAL, ProcessKind.CONTINUOUS, None, span, None, None
+            [assign],
+            EdgeType.COMBINATIONAL,
+            ProcessKind.CONTINUOUS,
+            None,
+            span,
+            self._call_reason(),
+            None,
         )
 
     def _lower_instance(self, instance: ast.InstanceSymbol) -> None:
@@ -566,12 +594,23 @@ class _Lowerer:
             unsupported = "always_latch (latches are outside the MVP)"
         assigns: list[GuardedAssign] = []
         self._delayed = False
+        self._called = None
         self._lower_statement(statement, (), assigns)
         if unsupported is None and self._delayed:
             unsupported = (
                 "intra-assignment timing control such as `q <= #1 d` (delays are outside the "
                 "MVP, so the value is not taken at the clock edge)"
             )
+        if unsupported is None:
+            unsupported = self._call_reason()
+        if unsupported is None and timing.sensitivity is not None:
+            missing = sorted(_process_reads(assigns) - timing.sensitivity)
+            if missing:
+                unsupported = (
+                    f"incomplete event list: the process reads {', '.join(missing)} without "
+                    "waiting on it, so its outputs can hold a value computed from an earlier "
+                    "value of that signal"
+                )
         if (
             unsupported is None
             and timing.edge_type is EdgeType.SEQUENTIAL
@@ -604,12 +643,14 @@ class _Lowerer:
             )
         edges = [event for event in events if event.edge in _EDGE_KINDS]
         if not edges:
-            return _Timing(
-                EdgeType.COMBINATIONAL,
-                None,
-                None,
-                "explicit level-sensitive event list treated as combinational logic",
-            )
+            # A level-sensitive list behaves as combinational logic only when it names
+            # every signal the process reads; the caller checks that once it is lowered.
+            sensitivity: set[str] = set()
+            for event in events:
+                waited = self._lower(event.expr)
+                if isinstance(waited, ir.SignalRef):
+                    sensitivity.add(waited.signal)
+            return _Timing(EdgeType.COMBINATIONAL, None, None, None, frozenset(sensitivity))
         if len(events) > 1:
             return _Timing(
                 EdgeType.SEQUENTIAL,
@@ -975,6 +1016,9 @@ class _Lowerer:
             arguments = list(expression.arguments)
             if expression.subroutineName in ("$signed", "$unsigned") and len(arguments) == 1:
                 return ir.Convert(width, signed, self._lower(arguments[0]))
+            if not expression.isSystemCall:
+                # The body may read signals that are not arguments; none of them is known.
+                self._called = self._called or expression.subroutineName
             return self._unsupported(expression, f"call to {expression.subroutineName}", width, signed)
         if isinstance(expression, ast.LValueReferenceExpression) and self._lvalue is not None:
             return self._lvalue
@@ -1130,6 +1174,15 @@ class _Lowerer:
         if offset < 0:
             return self._unsupported(expression, "member access", width, signed)
         return ir.PartSelect(width, signed, value, offset, f".{member.name}")
+
+    def _call_reason(self) -> str | None:
+        """Why a driver that calls a user-defined subroutine cannot be traversed."""
+        if self._called is None:
+            return None
+        return (
+            f"call to the user-defined subroutine {self._called} (subroutine bodies are not "
+            "analyzed, so the signals it reads are not known)"
+        )
 
     def _unsupported(
         self, expression: ast.Expression, what: str, width: int, signed: bool = False

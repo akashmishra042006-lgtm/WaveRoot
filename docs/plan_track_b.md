@@ -28,11 +28,15 @@ concatenated assignment targets.
 Reported but not traversed (the slice stops there and sets `truncated`):
 module instances, generate blocks, asynchronous reset or several edge events,
 `always_latch`, blocking assignments inside a clocked process, undriven
-internal signals.
+internal signals, calls to user-defined functions (their bodies may read
+signals that are not arguments), and level-sensitive event lists that do not
+name every signal the process reads.
 
 Kept as unknown dependencies (every operand is retained, nothing is
-evaluated): loops and other unmodeled statements, `inside`, function calls
-other than `$signed` and `$unsigned`, unpacked arrays, unpacked structs.
+evaluated): loops and other unmodeled statements, `inside`, system function
+calls other than `$signed` and `$unsigned`, unpacked arrays, unpacked structs.
+A level-sensitive event list that names every signal the process reads is
+treated exactly like `always @*`.
 
 ### 1.1 How the slicer treats time
 
@@ -90,9 +94,21 @@ boundary. Track C must pass both from the manifest.
 - A combinational process in which no assignment executes (an inferred latch,
   or an undriven path) ends the slice with `truncated` and
   `NO_ACTIVE_ASSIGNMENT`.
-- A process with an intra-assignment delay (`q <= #1 d`) is an unsupported
-  driver; the slice stops there.
-- `max_cycles_back` bounds the hold scan as well as the slice.
+- A combinational process (not a continuous assignment) that cannot be shown
+  to write the whole value on every path may keep some bits from an earlier
+  evaluation, so it ends the slice with `truncated` and `PARTIAL_ASSIGNMENT`.
+  Coverage is proven only from full writes: an unconditional one, an arm known
+  to be taken, or an `if` with an `else` or a `case` with a `default` whose
+  every possible arm writes. A process that writes only parts of a signal is
+  therefore never proven here; B-03's bit tracking narrows this to the bits
+  the slice follows.
+- A process with an intra-assignment delay (`q <= #1 d`), a call to a
+  user-defined function, or an incomplete level-sensitive event list is an
+  unsupported driver; the slice stops there.
+- `max_cycles_back` bounds the hold scan as well as the slice, and
+  `max_nodes` bounds the report: no node is added past it.
+- A hold scan is remembered per signal and start cycle, so tracing a held
+  value from every cycle of a long window stays linear.
 
 ## 2. Rules for every ticket
 

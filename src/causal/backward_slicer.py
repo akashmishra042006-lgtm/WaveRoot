@@ -32,13 +32,14 @@ from __future__ import annotations
 
 import re
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Final
 
 from src.causal import expr as ir
 from src.causal import fourstate as fs
-from src.causal.ast_graph import DesignGraph, Driver, GuardedAssign, SignalKind
+from src.causal.ast_graph import DesignGraph, Driver, GuardedAssign, ProcessKind, SignalKind
 from src.causal.fourstate import Tri, Vec
 from src.causal.sva_synth import synthesize_assertion
 from src.contracts import (
@@ -246,6 +247,41 @@ class _Decision:
     all_blocked: bool = True
 
 
+def _covers(paths: list[tuple[ir.Guard, ...]], outcome: Callable[[ir.Guard], Tri]) -> bool:
+    """True when every execution of a process reaches one of ``paths``.
+
+    Each path is the guard chain of a full write. A guard chain is reached
+    unconditionally when it is empty. Otherwise one ``if`` or ``case`` decision
+    covers when the arm it is known to take is covered, or, when that arm is
+    not known, the decision always takes some arm (an ``if`` with an ``else``,
+    a ``case`` with a ``default``) and every arm it may take is covered.
+    Anything else, including a ``case`` whose items happen to be exhaustive,
+    is not proven, so the answer errs towards "may keep a stored value".
+    """
+    if any(not path for path in paths):
+        return True
+    decisions: dict[int, dict[ir.Guard, list[tuple[ir.Guard, ...]]]] = {}
+    for path in paths:
+        decisions.setdefault(path[0].decision, {}).setdefault(path[0], []).append(path[1:])
+    for arms in decisions.values():
+        taken = [guard for guard in arms if outcome(guard) is Tri.TRUE]
+        if taken:
+            if _covers(arms[taken[0]], outcome):
+                return True
+            continue
+        kinds = {(guard.kind, guard.polarity) for guard in arms}
+        complete = {(ir.GuardKind.IF, True), (ir.GuardKind.IF, False)} <= kinds or any(
+            kind is ir.GuardKind.CASE_DEFAULT for kind, _ in kinds
+        )
+        if complete and all(
+            _covers(tails, outcome)
+            for guard, tails in arms.items()
+            if outcome(guard) is not Tri.FALSE
+        ):
+            return True
+    return False
+
+
 def _plural(count: int, singular: str, plural: str) -> str:
     return f"{count} {singular if count == 1 else plural}"
 
@@ -275,6 +311,8 @@ class _Slicer:
         self._reached: dict[_Key, None] = {}
         self._diagnostics: dict[Diagnostic, None] = {}
         self._truncated = False
+        # (signal, cycle) -> the cycle a hold scan starting there ends at.
+        self._hold_origins: dict[tuple[str, int], int] = {}
 
     # ---- entry ----------------------------------------------------------
 
@@ -314,15 +352,18 @@ class _Slicer:
         while self._queue:
             key = self._queue.popleft()
             if len(self._nodes) >= self._options.max_nodes:
-                self._stop(
-                    self._nodes[key],
-                    "SLICE_NODE_LIMIT",
-                    f"The slice reached the limit of {self._options.max_nodes} nodes; nodes "
-                    "beyond it were not expanded.",
-                )
+                self._node_limit(self._nodes[key])
                 continue
             self._expand(key)
         return self._report(anchor)
+
+    def _node_limit(self, node: _Node) -> None:
+        self._stop(
+            node,
+            "SLICE_NODE_LIMIT",
+            f"The slice reached the limit of {self._options.max_nodes} nodes; nodes beyond it "
+            "were not added or expanded.",
+        )
 
     def _unlocalized(self, code: str, message: str) -> CausalReport:
         self._diag(code, message)
@@ -475,6 +516,10 @@ class _Slicer:
             )
             return
         if branch is BranchStatus.PRUNED and not self._options.include_pruned:
+            return
+        if source not in self._nodes and len(self._nodes) >= self._options.max_nodes:
+            # The budget holds during expansion, not only between nodes.
+            self._node_limit(self._nodes[target])
             return
         self._node(source)
         identity = (source, target, edge_type, role, branch)
@@ -738,6 +783,22 @@ class _Slicer:
                 f"No assignment to {path} executes {when}; the process leaves it undriven or "
                 "infers storage, which is outside the MVP, so its value is not traced.",
             )
+        elif (
+            not definite
+            and driver.process is not ProcessKind.CONTINUOUS
+            and not _covers(
+                [assign.guards for assign, _ in live if assign.full_write],
+                lambda guard: ir.evaluate_guard(guard, lookup),
+            )
+        ):
+            # Some bits may keep a value from an earlier evaluation: a partial latch.
+            self._stop(
+                node,
+                "PARTIAL_ASSIGNMENT",
+                f"No assignment that writes all of {path} is certain to execute {when}, so "
+                "some of its bits may keep a value from an earlier evaluation (inferred "
+                "storage, which is outside the MVP); its value is not traced.",
+            )
         self._classify(node, driver, live, outcomes)
 
     def _judge_decision(
@@ -983,12 +1044,20 @@ class _Slicer:
         if not self._options.expand_holds:
             # Never scan past the depth limit: the work stays bounded by it.
             floor = 0 if limit is None else self._anchor_cycle - limit
-            while (
-                source_cycle > 0
-                and source_cycle >= floor
-                and self._held(signal, drivers, source_cycle)
-            ):
+            # Holds already scanned for this signal are reused, so tracing a held value
+            # from every cycle of a long window stays linear in the window.
+            scanned: list[int] = []
+            while source_cycle > 0 and source_cycle >= floor:
+                known = self._hold_origins.get((signal, source_cycle))
+                if known is not None:
+                    source_cycle = known
+                    break
+                if not self._held(signal, drivers, source_cycle):
+                    break
+                scanned.append(source_cycle)
                 source_cycle -= 1
+            for start in scanned:
+                self._hold_origins[(signal, start)] = source_cycle
         if limit is not None and self._anchor_cycle - source_cycle > limit:
             self._stop(
                 node,
