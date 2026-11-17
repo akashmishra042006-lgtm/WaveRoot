@@ -104,6 +104,9 @@ class GuardedAssign:
 
     ``full_write`` is false for a write to a part-select, element, or field.
     ``index_operands`` are run-time selectors on the left-hand side.
+    ``written`` is ``(offset, width)`` of the bits written, counted from the
+    target's left bit, when they are known at elaboration; None means the
+    written bits depend on a run-time value or are not modeled.
     """
 
     target: str
@@ -114,6 +117,7 @@ class GuardedAssign:
     blocking: bool
     span: SourceSpan | None
     text: str
+    written: tuple[int, int] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -357,6 +361,7 @@ class _Root:
     full_write: bool
     index_operands: tuple[ir.Expr, ...]
     guards: tuple[ir.Guard, ...]
+    bits: tuple[int, int] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -374,6 +379,7 @@ class _Target:
     rhs_offset: int
     width: int
     guards: tuple[ir.Guard, ...] = ()
+    bits: tuple[int, int] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -447,6 +453,9 @@ class _Lowerer:
         self._drivers: dict[str, list[Driver]] = {}
         self._aliases: dict[str, str] = {}
         self._arrays: dict[str, _ArrayLayout] = {}
+        # Unpacked structs: leaf signals holding the value, and immediate fields in order.
+        self._records: dict[str, tuple[str, ...]] = {}
+        self._fields: dict[str, tuple[str, ...]] = {}
         self._diagnostics: dict[Diagnostic, None] = {}
         self._texts: dict[str, str] = {}
         self._decisions = 0
@@ -522,19 +531,59 @@ class _Lowerer:
     ) -> None:
         canonical = symbol.type.canonicalType
         span = self._line_span(symbol.location)
-        if canonical.isUnpackedArray and self._declare_array(symbol, name, kind, span):
-            return
+        if self._declare_value(name, canonical, kind, span, symbol.location) is None:
+            self._diag(
+                "UNSUPPORTED_SIGNAL_TYPE",
+                f"{name} has type {symbol.type} at {self._where(symbol.location)}; "
+                "its value is not reconstructed and reads of it stay unknown.",
+            )
+            self._declare_aggregate(name, canonical, kind, span)
+
+    def _declare_value(
+        self,
+        name: str,
+        canonical: ast.Type,
+        kind: SignalKind,
+        span: SourceSpan | None,
+        location: pyslang.SourceLocation,
+    ) -> tuple[str, ...] | None:
+        """Declare ``name`` and return the leaf signals that hold its value.
+
+        An integral value is one signal. An unpacked array of integral elements
+        is one signal per element, ``mem[2]``. An unpacked struct is flattened
+        to one signal per leaf field, ``s.field`` or ``s.inner.field``. Returns
+        None, declaring nothing, for any other type.
+        """
         packed = _packed(canonical)
         if packed is not None:
             width, bit_range, signed = packed
             self._signals[name] = SignalInfo(name, width, bit_range, signed, kind, span)
-            return
-        self._diag(
-            "UNSUPPORTED_SIGNAL_TYPE",
-            f"{name} has type {symbol.type} at {self._where(symbol.location)}; "
-            "its value is not reconstructed and reads of it stay unknown.",
-        )
-        self._declare_aggregate(name, canonical, kind, span)
+            return (name,)
+        if canonical.isUnpackedArray:
+            return self._declare_array(name, canonical, kind, span, location)
+        if not isinstance(canonical, ast.UnpackedStructType):
+            return None
+        leaves: list[str] = []
+        fields: list[str] = []
+        for member in canonical:
+            if not isinstance(member, ast.FieldSymbol):
+                continue
+            field_name = f"{name}.{member.name}"
+            field_type = member.type.canonicalType
+            found = self._declare_value(field_name, field_type, kind, span, location)
+            if found is None:
+                self._diag(
+                    "UNSUPPORTED_SIGNAL_TYPE",
+                    f"{field_name} has type {member.type} at {self._where(location)}; its value "
+                    "is not reconstructed and reads of it stay unknown.",
+                )
+                self._declare_aggregate(field_name, field_type, kind, span)
+                found = (field_name,)
+            fields.append(field_name)
+            leaves.extend(found)
+        self._records[name] = tuple(leaves)
+        self._fields[name] = tuple(fields)
+        return tuple(leaves)
 
     def _declare_aggregate(
         self, name: str, canonical: ast.Type, kind: SignalKind, span: SourceSpan | None
@@ -546,26 +595,27 @@ class _Lowerer:
 
     def _declare_array(
         self,
-        symbol: ast.VariableSymbol | ast.NetSymbol,
         name: str,
+        canonical: ast.Type,
         kind: SignalKind,
         span: SourceSpan | None,
-    ) -> bool:
-        """Declare one signal per element, named ``mem[0]``; False if not possible.
+        location: pyslang.SourceLocation,
+    ) -> tuple[str, ...] | None:
+        """Declare one signal per element, named ``mem[0]``; None if not possible.
 
-        False leaves the declaration to the caller, which reports the type. An
+        None leaves the declaration to the caller, which reports the type. An
         array that has integral elements but cannot be expanded is declared
         here as one aggregate signal, with a diagnostic saying why.
         """
         ranges: list[tuple[int, int]] = []
-        current = symbol.type.canonicalType
+        current = canonical
         while current.isUnpackedArray and current.isFixedSize:
             declared = current.fixedRange
             ranges.append((declared.left, declared.right))
             current = current.arrayElementType.canonicalType
         packed = None if current.isUnpackedArray else _packed(current)
         if packed is None:
-            return False
+            return None
         count = math.prod(ir.dimension_size(bounds) for bounds in ranges)
         reason = None
         if any(min(bounds) < 0 for bounds in ranges):
@@ -575,12 +625,12 @@ class _Lowerer:
         if reason is not None:
             self._diag(
                 "ARRAY_NOT_EXPANDED",
-                f"{name} at {self._where(symbol.location)} is kept as one aggregate signal "
+                f"{name} at {self._where(location)} is kept as one aggregate signal "
                 f"because {reason}; reads of its elements stay unknown and every write to it "
                 "is kept.",
             )
-            self._declare_aggregate(name, symbol.type.canonicalType, kind, span)
-            return True
+            self._declare_aggregate(name, canonical, kind, span)
+            return (name,)
         width, bit_range, signed = packed
         elements: list[str] = []
         for indices in ir.element_indices(tuple(ranges)):
@@ -588,7 +638,7 @@ class _Lowerer:
             self._signals[element] = SignalInfo(element, width, bit_range, signed, kind, span)
             elements.append(element)
         self._arrays[name] = _ArrayLayout(name, tuple(ranges), width, signed, tuple(elements))
-        return True
+        return tuple(elements)
 
     def _add_drivers(
         self,
@@ -979,6 +1029,11 @@ class _Lowerer:
         span: SourceSpan | None,
         text: str | None = None,
     ) -> None:
+        left_type = assignment.left.type.canonicalType
+        composite = left_type.isUnpackedStruct or left_type.isUnpackedArray
+        if composite and not assignment.isCompound:
+            if self._lower_composite_assignment(assignment, guards, out, span, text):
+                return
         targets = self._targets(assignment.left)
         if assignment.isCompound:
             self._lvalue = self._lower(assignment.left)
@@ -1019,8 +1074,92 @@ class _Lowerer:
                     blocking=not assignment.isNonBlocking,
                     span=span,
                     text=text,
+                    written=target.bits,
                 )
             )
+
+    def _lower_composite_assignment(
+        self,
+        assignment: ast.AssignmentExpression,
+        guards: tuple[ir.Guard, ...],
+        out: list[GuardedAssign],
+        span: SourceSpan | None,
+        text: str | None,
+    ) -> bool:
+        """Lower a whole unpacked struct or array assignment leaf by leaf.
+
+        Handles a copy from another value of the same shape and an assignment
+        pattern. Returns False, emitting nothing, for any other right-hand
+        side; the caller then keeps it as a partial write of unknown value.
+        """
+        target = self._aggregate_name(assignment.left)
+        if target is None or self._leaves(target) is None:
+            return False
+        pairs = self._composite_sources(assignment.right, target)
+        if pairs is None:
+            return False
+        if text is None:
+            text = self._text(assignment.sourceRange) or "<assignment>"
+        for leaf, rhs in pairs:
+            info = self._signals[leaf]
+            out.append(
+                GuardedAssign(
+                    target=leaf,
+                    full_write=True,
+                    rhs=rhs,
+                    guards=guards,
+                    index_operands=(),
+                    blocking=not assignment.isNonBlocking,
+                    span=span,
+                    text=text,
+                    written=(0, info.width),
+                )
+            )
+        return True
+
+    def _composite_sources(
+        self, expression: ast.Expression, target: str
+    ) -> list[tuple[str, ir.Expr]] | None:
+        """The value each leaf of ``target`` takes from ``expression``, or None."""
+        while isinstance(expression, ast.ConversionExpression) and not _integral(expression.type):
+            expression = expression.operand
+        leaves = self._leaves(target)
+        if leaves is None:
+            info = self._signals.get(target)
+            if info is None:
+                return None
+            value = self._lower(expression)
+            if value.width != info.width:
+                value = ir.Convert(info.width, info.signed, value)
+            return [(target, value)]
+        source = self._aggregate_name(expression)
+        if source is not None:
+            pairs: list[tuple[str, ir.Expr]] = []
+            for leaf in leaves:
+                other = self._signals.get(source + leaf[len(target) :])
+                if other is None:
+                    return None
+                pairs.append((leaf, ir.SignalRef(other.width, other.signed, other.name)))
+            return pairs
+        patterns = (ast.StructuredAssignmentPatternExpression, ast.SimpleAssignmentPatternExpression)
+        if not isinstance(expression, patterns):
+            return None
+        children = self._fields.get(target)
+        if children is None:
+            layout = self._arrays.get(target)
+            if layout is None or len(layout.ranges) != 1:
+                return None
+            children = layout.elements
+        elements = list(expression.elements)
+        if len(elements) != len(children):
+            return None
+        pairs = []
+        for child, element in zip(children, elements):
+            found = self._composite_sources(element, child)
+            if found is None:
+                return None
+            pairs.extend(found)
+        return pairs
 
     def _lower_conservatively(
         self,
@@ -1092,6 +1231,7 @@ class _Lowerer:
                             offset + target.rhs_offset,
                             target.width,
                             target.guards,
+                            target.bits,
                         )
                     )
                 offset += width
@@ -1106,7 +1246,9 @@ class _Lowerer:
             info = self._signals[root.signal]
             width = info.width if root.full_write or partial is None else partial
             found.append(
-                _Target(root.signal, root.full_write, root.index_operands, 0, width, root.guards)
+                _Target(
+                    root.signal, root.full_write, root.index_operands, 0, width, root.guards, root.bits
+                )
             )
         return found
 
@@ -1116,19 +1258,22 @@ class _Lowerer:
         if access is not None:
             return self._element_roots(lvalue, *access)
         where = self._where(lvalue.sourceRange.start)
-        if isinstance(lvalue, ast.NamedValueExpression):
-            name = self._local_name(lvalue.symbol)
-            if name is not None:
-                return [_Root(name, True, (), ())]
-            layout = self._arrays.get(self._relative(lvalue.symbol) or "")
-            if layout is None:
+        name = self._aggregate_name(lvalue)
+        if name is not None:
+            info = self._signals.get(name)
+            if info is not None:
+                return [_Root(name, True, (), (), (0, info.width))]
+            leaves = self._leaves(name)
+            if leaves is None:
                 return None
             self._diag(
-                "UNSUPPORTED_ARRAY_ACCESS",
-                f"Assignment to the whole array {layout.name} at {where} is not modeled element "
-                "by element; every element keeps it as a partial write of unknown value.",
+                "UNSUPPORTED_AGGREGATE_ACCESS",
+                f"Assignment to all of {name} at {where} is not modeled leaf by leaf; every "
+                "element or field keeps it as a partial write of unknown value.",
             )
-            return [_Root(element, False, (), ()) for element in layout.elements]
+            return [_Root(leaf, False, (), ()) for leaf in leaves]
+        if isinstance(lvalue, ast.NamedValueExpression):
+            return None
         if isinstance(lvalue, ast.ElementSelectExpression):
             selectors: tuple[ast.Expression, ...] = (lvalue.selector,)
         elif isinstance(lvalue, ast.RangeSelectExpression):
@@ -1142,19 +1287,73 @@ class _Lowerer:
             return None
         if lvalue.value.type.canonicalType.isUnpackedArray:
             self._diag(
-                "UNSUPPORTED_ARRAY_ACCESS",
+                "UNSUPPORTED_AGGREGATE_ACCESS",
                 f"Assignment to a slice of an unpacked array at {where} is not modeled element by "
                 "element; every element it may touch keeps it as a partial write.",
             )
-        dynamic = tuple(
-            lowered
-            for lowered in (self._lower(selector) for selector in selectors)
-            if not isinstance(lowered, ir.Const)
-        )
+        lowered = [self._lower(selector) for selector in selectors]
+        dynamic = tuple(value for value in lowered if not isinstance(value, ir.Const))
         return [
-            _Root(root.signal, False, (*root.index_operands, *dynamic), root.guards)
+            _Root(
+                root.signal,
+                False,
+                (*root.index_operands, *dynamic),
+                root.guards,
+                self._select_bits(lvalue, root.bits, lowered),
+            )
             for root in inner
         ]
+
+    @staticmethod
+    def _select_bits(
+        lvalue: ast.Expression, bits: tuple[int, int] | None, selectors: Sequence[ir.Expr]
+    ) -> tuple[int, int] | None:
+        """Bits of the root signal a constant packed select or field of ``bits`` covers.
+
+        Offsets count from the root's left bit. None when the position depends
+        on a run-time value or cannot be computed.
+        """
+        if bits is None:
+            return None
+        base_offset, base_width = bits
+        if not isinstance(
+            lvalue,
+            (ast.MemberAccessExpression, ast.ElementSelectExpression, ast.RangeSelectExpression),
+        ):
+            return None
+        result = _integral(lvalue.type)
+        container = lvalue.value.type.canonicalType
+        if result is None or not container.isIntegral:
+            return None
+        width = result[0]
+        if isinstance(lvalue, ast.MemberAccessExpression):
+            member = lvalue.member
+            if not isinstance(member, ast.FieldSymbol):
+                return None
+            offset = base_width - member.bitOffset - width
+        else:
+            values = [_const_int(selector) for selector in selectors]
+            known = [value for value in values if value is not None]
+            if len(known) != len(values):
+                return None
+            declared = container.fixedRange
+            left, right = declared.left, declared.right
+            element = base_width // (abs(left - right) + 1)
+            if element < 1:
+                return None
+            if not isinstance(lvalue, ast.RangeSelectExpression):
+                indices = [known[0]]
+            elif lvalue.selectionKind is ast.RangeSelectionKind.Simple:
+                indices = known[:2]
+            elif lvalue.selectionKind is ast.RangeSelectionKind.IndexedUp:
+                indices = [known[0], known[0] + width // element - 1]
+            else:
+                indices = [known[0] - width // element + 1, known[0]]
+            positions = [left - index if left >= right else index - left for index in indices]
+            offset = min(positions) * element
+        if offset < 0 or offset + width > base_width:
+            return None
+        return base_offset + offset, width
 
     def _element_roots(
         self, lvalue: ast.Expression, layout: _ArrayLayout, selectors: Sequence[ast.Expression]
@@ -1170,7 +1369,7 @@ class _Lowerer:
         full = len(lowered) == len(layout.ranges)
         if not full:
             self._diag(
-                "UNSUPPORTED_ARRAY_ACCESS",
+                "UNSUPPORTED_AGGREGATE_ACCESS",
                 f"Assignment to a sub-array of {layout.name} at "
                 f"{self._where(lvalue.sourceRange.start)} is not modeled element by element; "
                 "every element it may touch keeps it as a partial write.",
@@ -1195,7 +1394,8 @@ class _Lowerer:
                     )
                 )
             else:
-                roots.append(_Root(element, full, (), tuple(guards)))
+                bits = (0, layout.width) if full else None
+                roots.append(_Root(element, full, (), tuple(guards), bits))
         if not roots:
             self._diag(
                 "ARRAY_INDEX_OUT_OF_RANGE",
@@ -1217,13 +1417,31 @@ class _Lowerer:
         ):
             selectors.append(current.selector)
             current = current.value
-        if not selectors or not isinstance(current, ast.NamedValueExpression):
-            return None
-        layout = self._arrays.get(self._relative(current.symbol) or "")
+        base = self._aggregate_name(current) if selectors else None
+        layout = self._arrays.get(base) if base is not None else None
         if layout is None:
             return None
         selectors.reverse()
         return layout, selectors
+
+    def _aggregate_name(self, expression: ast.Expression) -> str | None:
+        """Flattened name of a variable or an unpacked struct field chain, ``s.inner.f``."""
+        if isinstance(expression, ast.NamedValueExpression):
+            return self._relative(expression.symbol)
+        if (
+            isinstance(expression, ast.MemberAccessExpression)
+            and expression.value.type.canonicalType.isUnpackedStruct
+        ):
+            base = self._aggregate_name(expression.value)
+            return f"{base}.{expression.member.name}" if base is not None else None
+        return None
+
+    def _leaves(self, name: str) -> tuple[str, ...] | None:
+        """Leaf signals of an expanded unpacked array or struct, or None."""
+        layout = self._arrays.get(name)
+        if layout is not None:
+            return layout.elements
+        return self._records.get(name)
 
     def _relative(self, symbol: ast.Symbol) -> str | None:
         """Path of ``symbol`` relative to the top instance, or None outside it."""
@@ -1336,19 +1554,21 @@ class _Lowerer:
                 return ir.SignalRef(info[0], info[1], name)
             return ir.SignalRef(declared.width, False, name)
         width, signed = info if info is not None else (1, False)
-        layout = self._arrays.get(self._relative(symbol) or "")
-        if layout is not None:
-            what = f"whole-array reference to {layout.name}"
+        relative = self._relative(symbol)
+        leaves = self._leaves(relative) if relative is not None else None
+        if relative is not None and leaves is not None:
+            what = f"whole-value reference to {relative}"
             if not quiet:
                 self._diag(
                     "UNSUPPORTED_EXPRESSION",
                     f"{what} at {self._where(expression.sourceRange.start)} is not evaluated "
-                    "element by element; its value is unknown and every element is kept.",
+                    "leaf by leaf; its value is unknown and every element or field is kept.",
                 )
-            elements = tuple(
-                ir.SignalRef(layout.width, layout.signed, element) for element in layout.elements
+            refs = tuple(
+                ir.SignalRef(self._signals[leaf].width, self._signals[leaf].signed, leaf)
+                for leaf in leaves
             )
-            return ir.Unsupported(width, signed, what, elements)
+            return ir.Unsupported(width, signed, what, refs)
         what = f"reference to {symbol.kind.name} {symbol.name}"
         if not quiet:
             self._diag(
@@ -1462,6 +1682,14 @@ class _Lowerer:
         self, expression: ast.MemberAccessExpression, width: int, signed: bool
     ) -> ir.Expr:
         member = expression.member
+        if expression.value.type.canonicalType.isUnpackedStruct:
+            name = self._aggregate_name(expression)
+            info = self._signals.get(name) if name is not None else None
+            if info is None:
+                return self._unsupported(expression, "member access", width, signed)
+            if info.is_aggregate:
+                return ir.SignalRef(info.width, False, info.name)
+            return ir.SignalRef(width, signed, info.name)
         container = _integral(expression.value.type)
         if container is None or not isinstance(member, ast.FieldSymbol):
             return self._unsupported(expression, "member access", width, signed)

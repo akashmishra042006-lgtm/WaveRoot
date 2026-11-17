@@ -328,10 +328,16 @@ def dut_provider(**overrides: str) -> MockWaveformProvider:
 _ATOMS = [
     "a", "b", "c", "s", "a[2:1]", "b[3]", "a[k]", "b[k[0] +: 2]", "b[k -: 2]", "c[2 -: 2]",
     "4'd3", "4'b1x0z", "2'sb11", "3'sd2", "$signed(a)", "$unsigned(c)", "{a, s}", "{2{s}}",
-    "1'b1", "8'hf0", "4'sb1001", "m[k]", "m[2]", "m[k ^ 2'd3]",
+    "1'b1", "8'hf0", "4'sb1001", "m[k]", "m[2]", "m[k ^ 2'd3]", "ps.hi", "ps.lo", "ps.lo[3:1]",
 ]  # fmt: skip
 _ARRAY = ("m", "logic [3:0]", 4, 4)
 """An unpacked array operand: name, element type, element width, element count."""
+_PACKAGE = (
+    "package evp;\n"
+    "  typedef struct packed { logic [2:0] hi; logic [4:0] lo; } pair_t;\n"
+    "endpackage\n"
+)
+"""A packed struct with uneven fields, so field offsets are not symmetric."""
 _BINARY = [
     "+", "-", "*", "/", "%", "&", "|", "^", "~^", "==", "!=", "===", "!==", "==?", "!=?",
     "<", "<=", ">", ">=", "&&", "||", "<<", ">>", "<<<", ">>>", "**", "->", "<->",
@@ -343,7 +349,37 @@ _OPERANDS = [
     ("c", "logic signed [3:0]", 4, "s"),
     ("s", "logic [1:0]", 2, ""),
     ("k", "logic [1:0]", 2, ""),
+    ("ps", "evp::pair_t", 8, ""),
 ]
+
+
+def _operand_ports() -> str:
+    array, element_type, _, count = _ARRAY
+    ports = ", ".join(f"input {type_} {name}" for name, type_, _, _ in _OPERANDS)
+    return f"{ports}, input {element_type} {array} [{count}]"
+
+
+def _operand_values(rng: random.Random, trial: int) -> tuple[dict[str, str], str]:
+    """Random four-state operand values, and ``localparam`` text giving them to slang.
+
+    The first trials use known bits only; ``k`` is always known because slang
+    rejects an unknown index in a constant expression.
+    """
+
+    def bits(width: int, known: bool) -> str:
+        return "".join(rng.choice("01" if known or rng.random() < 0.6 else "01xz") for _ in range(width))
+
+    values = {name: bits(width, trial < 5 or name == "k") for name, _, width, _ in _OPERANDS}
+    array, element_type, element_width, count = _ARRAY
+    elements = [bits(element_width, trial < 5) for _ in range(count)]
+    values.update({f"{array}[{index}]": value for index, value in enumerate(elements)})
+    params = "".join(
+        f"  localparam {type_} {name} = {width}'{sign}b{values[name]};\n"
+        for name, type_, width, sign in _OPERANDS
+    )
+    pattern = ", ".join(f"{element_width}'b{value}" for value in elements)
+    params += f"  localparam {element_type} {array} [{count}] = '{{{pattern}}};\n"
+    return values, params
 
 
 def _random_expression(rng: random.Random, depth: int) -> str:
@@ -386,45 +422,74 @@ def test_evaluator_agrees_with_slang_constant_evaluation(tmp_path: Path, seed: i
     operands replaced by literals, are evaluated by slang as ``localparam``
     values. Select indices stay known because slang rejects an ``x`` index in a
     constant expression; that case has its own test below. The unpacked array
-    ``m`` is read through element signals ``m[0]`` .. ``m[3]``.
+    ``m`` is read through element signals ``m[0]`` .. ``m[3]``, and ``ps`` is a
+    packed struct read through its fields.
     """
     rng = random.Random(seed)
     expressions = [_random_expression(rng, 3) for _ in range(80)]
-    array, element_type, element_width, count = _ARRAY
-    ports = ", ".join(f"input {type_} {name}" for name, type_, _, _ in _OPERANDS)
-    ports += f", input {element_type} {array} [{count}]"
     outputs = "".join(f", output logic [7:0] y{i}" for i in range(len(expressions)))
     assigns = "".join(f"  assign y{i} = {text};\n" for i, text in enumerate(expressions))
-    design = build(tmp_path, f"module ev({ports}{outputs});\n{assigns}endmodule\n", "ev.sv")
+    source = f"{_PACKAGE}module ev({_operand_ports()}{outputs});\n{assigns}endmodule\n"
+    design = build(tmp_path, source, "ev.sv")
     assert not design.diagnostics, "every generated construct must be supported"
-
-    def random_bits(width: int, known: bool) -> str:
-        return "".join(rng.choice("01" if known or rng.random() < 0.6 else "01xz") for _ in range(width))
 
     checked = 0
     for trial in range(20):
-        values = {
-            name: random_bits(width, trial < 5 or name == "k")
-            for name, _, width, _ in _OPERANDS
-        }
-        elements = [random_bits(element_width, trial < 5) for _ in range(count)]
-        values.update({f"{array}[{index}]": bits for index, bits in enumerate(elements)})
-        params = "".join(
-            f"  localparam {type_} {name} = {width}'{sign}b{values[name]};\n"
-            for name, type_, width, sign in _OPERANDS
-        )
-        pattern = ", ".join(f"{element_width}'b{bits}" for bits in elements)
-        params += f"  localparam {element_type} {array} [{count}] = '{{{pattern}}};\n"
+        values, params = _operand_values(rng, trial)
         results = "".join(
             f"  localparam logic [7:0] y{i} = {text};\n" for i, text in enumerate(expressions)
         )
-        expected = _slang_constants(f"module oracle;\n{params}{results}endmodule\n")
+        expected = _slang_constants(f"{_PACKAGE}module oracle;\n{params}{results}endmodule\n")
         for i, text in enumerate(expressions):
             rhs = design.drivers[f"y{i}"][0].assigns[0].rhs
             got = ir.evaluate(rhs, lambda signal: Vec(values[signal])).bits
             assert got == expected[f"y{i}"], f"{text} with {values}"
             checked += 1
     assert checked == 1600
+
+
+def test_part_select_and_field_writes_place_bits_like_slang(tmp_path: Path) -> None:
+    """Differential test of the bit range a partial write records.
+
+    Each wire is written in two parts, by part-selects or by packed struct
+    fields. The parts this package evaluates, placed at the offsets recorded
+    in ``GuardedAssign.written``, must equal slang's value of the whole.
+    """
+    rng = random.Random(3)
+    count = 30
+    pairs = [(_random_expression(rng, 2), _random_expression(rng, 2)) for _ in range(count)]
+    lines = []
+    for i, (first, second) in enumerate(pairs):
+        lines.append(f"  wire [7:0] w{i};\n  assign w{i}[7:3] = {first};\n")
+        lines.append(f"  assign w{i}[2:0] = {second};\n")
+        lines.append(f"  wire evp::pair_t p{i};\n  assign p{i}.lo = {first};\n")
+        lines.append(f"  assign p{i}.hi = {second};\n")
+    source = f"{_PACKAGE}module pw({_operand_ports()});\n{''.join(lines)}endmodule\n"
+    design = build(tmp_path, source, "pw.sv")
+    assert not design.diagnostics
+
+    for trial in range(10):
+        values, params = _operand_values(rng, trial)
+        results = "".join(
+            f"  localparam logic [4:0] yh{i} = {first};\n"
+            f"  localparam logic [2:0] yl{i} = {second};\n"
+            f"  localparam logic [4:0] ylo{i} = {first};\n"
+            f"  localparam logic [2:0] yhi{i} = {second};\n"
+            for i, (first, second) in enumerate(pairs)
+        )
+        expected = _slang_constants(f"{_PACKAGE}module oracle;\n{params}{results}endmodule\n")
+        for i in range(count):
+            for name, whole in ((f"w{i}", expected[f"yh{i}"] + expected[f"yl{i}"]),
+                                (f"p{i}", expected[f"yhi{i}"] + expected[f"ylo{i}"])):  # fmt: skip
+                placed = ["?"] * 8
+                for driver in design.drivers[name]:
+                    (assign,) = driver.assigns
+                    assert assign.written is not None and not assign.full_write
+                    offset, width = assign.written
+                    got = ir.evaluate(assign.rhs, lambda signal: Vec(values[signal])).bits
+                    assert len(got) == width
+                    placed[offset : offset + width] = got
+                assert "".join(placed) == whole, f"{name} with {values}"
 
 
 def test_unknown_select_index_yields_unknown_bits(tmp_path: Path) -> None:
@@ -1103,6 +1168,252 @@ def test_array_beyond_the_element_limit_stays_aggregate(tmp_path: Path) -> None:
     assert isinstance(design.drivers["y"][0].assigns[0].rhs, ir.ArrayElement)
     (write,) = design.drivers["mem"][0].assigns
     assert not write.full_write, "a write into an aggregate array is partial"
+
+
+# --------------------------------------------------------------------------
+# Structs and bit-precise partial writes (B-03)
+# --------------------------------------------------------------------------
+
+PACKED_SV = """\
+module ps (input logic clk, input logic en_hi, en_lo, input logic [3:0] a, b,
+           output logic [3:0] y, w);
+  typedef struct packed { logic [3:0] hi; logic [3:0] lo; } pair_t;
+  pair_t s;
+  logic [3:0] t;
+  always_ff @(posedge clk) begin
+    if (en_hi) s.hi <= a;
+    if (en_lo) s.lo <= b;
+  end
+  assign y = s.hi;
+  assign t = s.lo;
+  assign w = s.hi ^ t;
+endmodule
+"""
+
+
+def packed_provider() -> MockWaveformProvider:
+    return static_provider(
+        {"en_hi": "1", "en_lo": "1", "a": "1010", "b": "0101"},
+        changing={
+            "s": [(0, "00000000"), (25000, "10100101")],
+            "y": [(0, "0000"), (25000, "1010")],
+            "t": [(0, "0000"), (25000, "0101")],
+            "w": [(0, "0000"), (25000, "1111")],
+        },
+    )
+
+
+def test_field_consumer_does_not_retain_the_other_fields_write(tmp_path: Path) -> None:
+    design = build(tmp_path, PACKED_SV)
+    report = slice_failure(
+        failure_at("y", 2, 25000, actual="1010", expected="0000"), packed_provider(), design, OPTIONS
+    )
+    assert not report.truncated and codes(report) == set()
+    s = ("s", 2, SETTLED)
+    (taken,) = edges_of(report, ("a", 2, BEFORE), s)
+    assert (taken.edge_type, taken.branch) == (EdgeType.SEQUENTIAL, BranchStatus.RETAINED)
+    (other,) = edges_of(report, ("b", 2, BEFORE), s)
+    assert other.branch is BranchStatus.PRUNED
+    assert "`s.lo <= b` writes only bits [3:0] of tb.dut.s; the slice follows bits [7:4]" in (
+        other.reason
+    )
+    (enable,) = edges_of(report, ("en_lo", 2, BEFORE), s)
+    assert enable.branch is BranchStatus.PRUNED and "does not affect" in enable.reason
+    (needed,) = edges_of(report, ("en_hi", 2, BEFORE), s)
+    assert needed.branch is BranchStatus.RETAINED
+    # hi is written at this edge, so no bit the slice follows holds.
+    assert not [n for n in report.nodes if n.signal_path == "tb.dut.s" and n.observation.phase is BEFORE]
+    lo_write_line = 8
+    assert all(
+        suspect.location is None or suspect.location.line != lo_write_line
+        for suspect in report.suspects
+    )
+    assert CausalReport.model_validate_json(report.model_dump_json()) == report
+
+
+def test_node_reached_again_for_more_bits_is_expanded_again(tmp_path: Path) -> None:
+    """w reads s.hi directly and s.lo through t, so the demand on s grows after its expansion."""
+    design = build(tmp_path, PACKED_SV)
+    report = slice_failure(
+        failure_at("w", 2, 25000, actual="1111", expected="0000"), packed_provider(), design, OPTIONS
+    )
+    assert not report.truncated and codes(report) == set()
+    s = ("s", 2, SETTLED)
+    for operand in ("a", "b", "en_hi", "en_lo"):
+        found = edges_of(report, (operand, 2, BEFORE), s)
+        assert branches(found) == {BranchStatus.RETAINED}, operand
+    # Expanding again replaced the earlier edges instead of adding beside them.
+    targets = [edge for edge in report.edges if edge.target == node_of(report, *s).id]
+    assert len(targets) == len({(e.source, e.role, e.branch) for e in targets})
+    assert CausalReport.model_validate_json(report.model_dump_json()) == report
+
+
+PARTIAL_SV = """\
+module pw (input logic clk, en, input logic [3:0] a, b, input logic [7:0] c,
+           output logic [7:0] q, r, t, u);
+  always_ff @(posedge clk) begin
+    q[7:4] <= a;
+    q[3:0] <= b;
+    if (en) r[7:4] <= a;
+    t <= c;
+    t[3:0] <= b;
+    u[7:4] <= a;
+    u <= c;
+  end
+endmodule
+"""
+
+
+def partial_provider() -> MockWaveformProvider:
+    return static_provider(
+        {
+            "en": "1", "a": "1010", "b": "0101", "c": "11110000",
+            "q": "10100101", "r": "10100000", "t": "11110101", "u": "11110000",
+        }  # fmt: skip
+    )
+
+
+def hold_nodes(report: CausalReport, signal: str) -> list[CausalNode]:
+    return [
+        node
+        for node in report.nodes
+        if node.signal_path == f"{SCOPE}.{signal}" and node.observation.phase is BEFORE
+    ]
+
+
+def test_partial_writes_that_cover_the_signal_remove_the_hold(tmp_path: Path) -> None:
+    design = build(tmp_path, PARTIAL_SV)
+    q = slice_failure(
+        failure_at("q", 2, 25000, actual="10100101", expected="0"*8), partial_provider(), design, OPTIONS
+    )
+    assert branches(edges_of(q, ("a", 2, BEFORE), ("q", 2, SETTLED))) == {BranchStatus.RETAINED}
+    assert branches(edges_of(q, ("b", 2, BEFORE), ("q", 2, SETTLED))) == {BranchStatus.RETAINED}
+    assert not hold_nodes(q, "q"), "two halves cover q, so nothing holds"
+
+    # A full write followed by a partial one also leaves nothing to hold.
+    t = slice_failure(
+        failure_at("t", 2, 25000, actual="11110101", expected="0"*8), partial_provider(), design, OPTIONS
+    )
+    assert branches(edges_of(t, ("c", 2, BEFORE), ("t", 2, SETTLED))) == {BranchStatus.RETAINED}
+    assert not hold_nodes(t, "t")
+    assert CausalReport.model_validate_json(q.model_dump_json()) == q
+
+
+def test_one_partial_write_keeps_the_hold_for_the_other_bits(tmp_path: Path) -> None:
+    design = build(tmp_path, PARTIAL_SV)
+    report = slice_failure(
+        failure_at("r", 2, 25000, actual="10100000", expected="0"*8), partial_provider(), design, OPTIONS
+    )
+    r = ("r", 2, SETTLED)
+    (write,) = edges_of(report, ("a", 2, BEFORE), r)
+    assert write.branch is BranchStatus.RETAINED
+    (hold,) = edges_of(report, ("r", 2, BEFORE), r)
+    assert hold.branch is BranchStatus.RETAINED
+    assert "Bits [3:0] of tb.dut.r are not written at the cycle 2 clock edge" in hold.reason
+    # The held low half carries back; the write of the high half does not stop the skip.
+    (carry,) = edges_of(report, ("r", 0, SETTLED), ("r", 2, BEFORE))
+    assert carry.reason.startswith("Carry")
+    assert CausalReport.model_validate_json(report.model_dump_json()) == report
+
+
+def test_full_write_after_a_partial_one_overwrites_it(tmp_path: Path) -> None:
+    design = build(tmp_path, PARTIAL_SV)
+    report = slice_failure(
+        failure_at("u", 2, 25000, actual="11110000", expected="0"*8), partial_provider(), design, OPTIONS
+    )
+    (early,) = edges_of(report, ("a", 2, BEFORE), ("u", 2, SETTLED))
+    assert early.branch is BranchStatus.PRUNED
+    assert "`u[7:4] <= a` is overwritten by the later assignment `u <= c`" in early.reason
+    assert not hold_nodes(report, "u")
+
+
+def test_written_bit_ranges_are_recorded_for_selects_fields_and_unions(tmp_path: Path) -> None:
+    design = build(
+        tmp_path,
+        "module wr (input logic clk, input logic [2:0] k, input logic [3:0] a,\n"
+        "           output logic [7:0] y);\n"
+        "  typedef struct packed { logic [3:0] hi; logic [3:0] lo; } pair_t;\n"
+        "  typedef union packed { logic [7:0] w; pair_t p; } un_t;\n"
+        "  logic [7:0] q, v;\n"
+        "  logic [0:7] asc;\n"
+        "  pair_t s;\n"
+        "  un_t u;\n"
+        "  always_ff @(posedge clk) begin\n"
+        "    q[3:0] <= a;\n"
+        "    q[k] <= a[0];\n"
+        "    v[5 -: 2] <= a[1:0];\n"
+        "    v[0 +: 2] <= a[1:0];\n"
+        "    asc[2:3] <= a[1:0];\n"
+        "    s.hi <= a;\n"
+        "    u.p.lo <= a;\n"
+        "  end\n"
+        "  assign y = q ^ v ^ asc ^ s ^ u;\n"
+        "endmodule\n",
+    )
+
+    def written(signal: str) -> list[tuple[int, int] | None]:
+        (driver,) = design.drivers[signal]
+        return [assign.written for assign in driver.assigns]
+
+    assert written("q") == [(4, 4), None], "a run-time index has no fixed bit range"
+    assert written("v") == [(2, 2), (6, 2)]
+    assert written("asc") == [(2, 2)]
+    assert written("s") == [(0, 4)]
+    assert written("u") == [(4, 4)], "a union member write overlaps the low bits"
+
+
+STRUCT_SV = """\
+module us (input logic [3:0] a, b, output logic [3:0] y, output logic [1:0] z);
+  typedef struct { logic [3:0] f; logic [3:0] g; } rec_t;
+  typedef struct { logic [1:0] arr [2]; logic h; } in_t;
+  typedef struct { in_t inner; logic [3:0] k; } out_t;
+  rec_t s, t;
+  out_t o, p;
+  assign s = '{f: a, g: b};
+  assign t = s;
+  assign y = t.g;
+  assign o = '{'{'{2'd1, 2'd2}, 1'b1}, a};
+  assign p = o;
+  assign z = p.inner.arr[1];
+endmodule
+"""
+
+
+def test_unpacked_structs_are_flattened_and_copied_field_by_field(tmp_path: Path) -> None:
+    design = build(tmp_path, STRUCT_SV)
+    assert not design.diagnostics
+    names = set(design.signals)
+    assert {"s.f", "s.g", "t.f", "t.g", "o.inner.arr[0]", "o.inner.arr[1]", "o.inner.h"} <= names
+    assert not {"s", "t", "o", "o.inner", "o.inner.arr"} & names
+    assert design.signals["o.k"].bit_range == BitRange(left=3, right=0)
+
+    def rhs(signal: str) -> ir.Expr:
+        (driver,) = design.drivers[signal]
+        (assign,) = driver.assigns
+        assert assign.full_write and assign.written == (0, design.signals[signal].width)
+        return assign.rhs
+
+    assert rhs("s.f") == ir.SignalRef(4, False, "a")
+    assert rhs("t.g") == ir.SignalRef(4, False, "s.g")
+    assert ir.evaluate(rhs("o.inner.arr[1]"), lambda _: None).bits == "10"
+    assert rhs("p.inner.arr[1]") == ir.SignalRef(2, False, "o.inner.arr[1]")
+    assert ir.signals_of(rhs("z")) == ("p.inner.arr[1]",)
+
+
+def test_struct_copy_then_one_field_read_keeps_only_that_fields_source(tmp_path: Path) -> None:
+    design = build(tmp_path, STRUCT_SV)
+    provider = static_provider(
+        {"a": "0011", "b": "0101", "s.f": "0011", "s.g": "0101", "t.f": "0011", "t.g": "0101",
+         "y": "0101"}  # fmt: skip
+    )
+    options = SliceOptions(trace_scope=SCOPE, synthesize_assertion=False)
+    report = slice_failure(
+        failure_at("y", 2, 25000, actual="0101", expected="0000"), provider, design, options
+    )
+    assert codes(report) == set() and not report.truncated
+    paths = {node.signal_path for node in report.nodes}
+    assert paths == {"tb.dut.y", "tb.dut.t.g", "tb.dut.s.g", "tb.dut.b"}
+    assert CausalReport.model_validate_json(report.model_dump_json()) == report
 
 
 def test_expand_holds_steps_back_one_cycle_at_a_time(

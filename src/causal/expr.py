@@ -418,11 +418,17 @@ def describe_guard(guard: Guard) -> str:
 
 @dataclass(frozen=True, slots=True)
 class Read:
-    """One signal read, with its role and the ``?:`` arms it sits inside."""
+    """One signal read, with its role and the ``?:`` arms it sits inside.
+
+    ``bits`` is ``(offset, width)`` of the bits read, counted from the
+    signal's left bit, when the read is a constant part-select or packed field
+    of the whole signal; None means every bit may be read.
+    """
 
     signal: str
     role: EdgeRole
     guards: tuple[Guard, ...]
+    bits: tuple[int, int] | None = None
 
 
 def collect_reads(
@@ -444,6 +450,15 @@ def _collect(
 ) -> None:
     if isinstance(expr, SignalRef):
         found.setdefault(Read(expr.signal, role, guards))
+    elif isinstance(expr, PartSelect):
+        base, offset = expr.value, expr.offset
+        while isinstance(base, PartSelect):
+            offset += base.offset
+            base = base.value
+        if isinstance(base, SignalRef):
+            found.setdefault(Read(base.signal, role, guards, (offset, expr.width)))
+        else:
+            _collect(expr.value, role, guards, found)
     elif isinstance(expr, Conditional):
         _collect(expr.predicate, EdgeRole.CONTROL, guards, found)
         text = to_sv(expr.predicate)

@@ -28,7 +28,19 @@ packed vectors; constant and indexed part-selects; packed struct field reads;
 parameters and enum values; concatenated assignment targets; fixed-size
 unpacked arrays of integral elements, up to 4096 elements (B-02; one signal per
 element, `mem[2]` or `grid[1][0]`, reads and writes selected by `index`
-guards).
+guards); unpacked structs flattened to one signal per leaf field, `s.f` or
+`o.inner.arr[1]`, with whole copies and assignment patterns lowered field by
+field (B-03); bit-precise partial writes through constant part-selects, packed
+struct fields, and packed union members (B-03).
+
+Bit demand (B-03). Nodes stay whole-signal, but the slicer records which bits
+of each node it must explain. A constant part-select or packed field read
+demands only its bits, an assignment that writes none of the demanded bits is
+pruned, an assignment is overwritten only when later definite writes cover
+every demanded bit it writes, and the hold edge appears only for demanded bits
+that no definite write covers. When a node is reached again for more bits it is
+expanded again; demand only grows, so this terminates. Carry edges still
+compare whole values, as the contract requires.
 
 B-02 deviates from its ticket in one place. The ticket asked for an unknown
 read index to give the bitwise merge of all elements. IEEE 1800 section 7.4.6
@@ -46,10 +58,11 @@ internal signals.
 
 Kept as unknown dependencies (every operand is retained, nothing is
 evaluated): loops and other unmodeled statements, `inside`, function calls
-other than `$signed` and `$unsigned`; whole-array copies, array slices,
-sub-arrays, and assignment patterns; arrays above the element cap or with
-negative indices (one aggregate signal, `ARRAY_NOT_EXPANDED`); unpacked
-structs.
+other than `$signed` and `$unsigned`; array slices, sub-arrays,
+multi-dimensional and replicated assignment patterns, and whole-value
+assignments from anything but a same-shaped value or a pattern; arrays above
+the element cap or with negative indices (one aggregate signal,
+`ARRAY_NOT_EXPANDED`); struct and array ports.
 
 ### 1.1 How the slicer treats time
 
