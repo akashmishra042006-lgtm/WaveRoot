@@ -61,10 +61,29 @@ class UnsupportedTraceError(ContractError):
 _COMPONENT: Final = r"[A-Za-z_][A-Za-z0-9_$]*(?:\[[0-9]+\])*"
 _COMPONENT_RE: Final = re.compile(_COMPONENT)
 _REFERENCE_RE: Final = re.compile(
-    r"(?P<name>[^\[\]]+)(?P<indices>(?:\[-?[0-9]+\])*)(?:\[(?P<left>-?[0-9]+):(?P<right>-?[0-9]+)\])?"
+    r"(?P<name>[^\[\]]+)(?P<indices>(?:\[-?[0-9]+\])*)(?:\[(?P<left>-?[0-9]{1,9}):(?P<right>-?[0-9]{1,9})\])?"
 )
 _TIMESCALE_RE: Final = re.compile(r"(1|10|100)(s|ms|us|ns|ps|fs)")
 _VECTOR_RE: Final = re.compile(r"[01xz]+")
+_SIZE_RE: Final = re.compile(r"0*[1-9][0-9]{0,8}")  # ASCII digits only, at least 1
+_DIGITS_RE: Final = re.compile(r"[0-9]+")  # ASCII only: str.isdigit() also accepts "²"
+# Python cannot convert decimal strings of more than 4300 digits to or from int
+# by default. Timestamps are capped well below that so every timestamp, scaled
+# to picoseconds, can still be printed and serialized (spec.md sections 4, 11).
+MAX_TIMESTAMP_DIGITS: Final = 4000
+
+
+def _timestamp(token: str) -> int:
+    """The integer after ``#``, in ASCII decimal."""
+    digits = token[1:]
+    if _DIGITS_RE.fullmatch(digits) is None:
+        raise InvalidTraceError(f"invalid timestamp {token[:40]!r}")
+    significant = digits.lstrip("0")
+    if len(significant) > MAX_TIMESTAMP_DIGITS:
+        raise UnsupportedTraceError(
+            f"timestamp has {len(significant)} digits; at most {MAX_TIMESTAMP_DIGITS} are supported"
+        )
+    return int(significant or "0")
 _UNSUPPORTED_VAR_TYPES: Final = frozenset({"real", "realtime", "event", "string"})
 _BODY_BLOCKS: Final = frozenset({"$dumpvars", "$dumpall", "$dumpon", "$dumpoff"})
 
@@ -212,7 +231,7 @@ class _Parser:
         var_type, size_text, code = body[0], body[1], body[2]
         reference = "".join(body[3:])
         scope = ".".join(self._scopes)
-        if not size_text.isdigit() or int(size_text) < 1:
+        if _SIZE_RE.fullmatch(size_text) is None:
             raise InvalidTraceError(f"invalid size {size_text!r} for $var {reference!r}")
         size = int(size_text)
 
@@ -324,9 +343,10 @@ class _Parser:
                     return
                 if code not in dropped:
                     raise InvalidTraceError(f"value change for undeclared identifier code {code!r}")
-            if not dumping:
-                return
-            width = entry.width if entry is not None else dropped[code]
+                width = dropped[code]
+            else:
+                width = entry.width
+            # Records are validated even where they are discarded (dump gaps, keep).
             if scalar:
                 if width != 1:
                     raise InvalidTraceError(
@@ -339,20 +359,22 @@ class _Parser:
                     )
                 fill = value[0] if value[0] in "xz" else "0"
                 value = fill * (width - len(value)) + value
+            if not dumping:
+                return
             if time is None:
                 time = first_time = 0
             if entry is not None:
                 pending.setdefault(code, []).append(value)
 
+        open_block: str | None = None
         while position < count:
             token = tokens[position]
             position += 1
             lead = token[0]
             if lead == "#":
-                digits = token[1:]
-                if not digits.isdigit():
-                    raise InvalidTraceError(f"invalid timestamp {token!r}")
-                new_time = to_picoseconds(int(digits), magnitude, unit)
+                if open_block is not None:
+                    raise InvalidTraceError(f"timestamp {token!r} inside an unterminated {open_block} block")
+                new_time = to_picoseconds(_timestamp(token), magnitude, unit)
                 if time is None:
                     time = first_time = new_time
                 elif new_time < time:
@@ -382,8 +404,13 @@ class _Parser:
                 if code in series or code in dropped:
                     raise InvalidTraceError(f"non-digital value for digital identifier code {code!r}")
             elif token == "$end":
-                continue
+                if open_block is None:
+                    raise InvalidTraceError("$end without an open block in the value-change section")
+                open_block = None
             elif token in _BODY_BLOCKS:
+                if open_block is not None:
+                    raise InvalidTraceError(f"{token} begins inside an unterminated {open_block} block")
+                open_block = token
                 if time is None:
                     time = first_time = 0
                 if token == "$dumpoff" and dumping:
@@ -405,6 +432,8 @@ class _Parser:
             else:
                 raise InvalidTraceError(f"unexpected token {token!r} in the value-change section")
 
+        if open_block is not None:
+            raise InvalidTraceError(f"trace ends inside an unterminated {open_block} block")
         if time is None or first_time is None:
             raise InvalidTraceError("trace contains no simulation time")
         if dumping:
