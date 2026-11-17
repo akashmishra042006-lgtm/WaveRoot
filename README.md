@@ -6,8 +6,9 @@ candidate causes back to SystemVerilog source locations.
 
 ## Current status
 
-Repository bootstrap and the draft Track A requirements brief. The waveform
-engine, shared contracts, causal tracer, CLI, and UI are not implemented yet.
+The shared foundation is in place: [spec.md](spec.md), `src/contracts.py`, the
+mock FIFO fixture in `tests/fixtures/`, and contract tests. The waveform engine,
+causal tracer, simulator runner, CLI, and UI are not implemented yet.
 
 ## Development setup
 
@@ -27,9 +28,9 @@ includes pytest, mypy, and Hypothesis; Pydantic v2 is available for the shared
 contracts. Parser, simulator, platform, and frontend dependencies will be added
 by their owners when implemented.
 
-There are currently no test cases, so `uv run pytest` exits with code 5
-(no tests collected). An empty suite is not a passing functional check.
-The first substantive suite will be `tests/test_contracts.py`.
+`uv run pytest` currently runs the contract tests in `tests/test_contracts.py`.
+They check the shared models and the mock provider only; they are not engine or
+end-to-end coverage.
 
 Run commands from the repository root. This bootstrap uses an unpackaged uv
 project and preserves the team's `src.waveform`, `src.causal`, and `src.app`
@@ -52,12 +53,13 @@ These settings do not select or pin subagent models.
 
 ## Next handoff
 
-1. Review [Track A's brief](docs/brief_track_a.md); Devs 2 and 3 add their briefs
-   to `docs/brief_track_b.md` and `docs/brief_track_c.md`.
-2. Reconcile timing, reset, golden-trace, and failure-result decisions together.
-3. Create `spec.md`, `src/contracts.py`, `tests/fixtures/mock_fifo_failure.json`,
-   a mock provider, and meaningful contract tests in a shared foundation PR.
-4. After that PR merges, branch from the same `main` for each track.
+1. All three developers read [spec.md](spec.md), especially the cross-track
+   decisions in section 15.1, which are final for schema 1.
+2. After it merges, each track branches from the same `main` and builds against
+   `src/contracts.py`. Tracks B and C can start immediately using
+   `MockWaveformProvider` and `tests/fixtures/mock_fifo_failure.json`.
+3. Interface changes go through a focused pull request that updates the spec,
+   contracts, fixtures, and tests together.
 
 Use pull requests for changes and keep each branch within its track. The latest
 project plan targets four benchmarks; exact fixtures and acceptance criteria

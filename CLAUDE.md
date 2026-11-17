@@ -11,11 +11,11 @@
   wires them into `src/app/cli.py`.
 
 ## Shared contracts
-- The next phase combines all three briefs into `spec.md`, `src/contracts.py`,
-  and deterministic mock fixtures before parallel engine implementation.
-- `docs/brief_track_a.md` contains proposals, not a locked specification.
-- Once established, `src/contracts.py` is the cross-track source of truth.
-  Propose interface changes explicitly and coordinate them with the team before
+- `spec.md` and `src/contracts.py` are the cross-track source of truth. The
+  briefs in `docs/` are background; where they differ, the spec wins.
+- Build against `MockWaveformProvider` and `tests/fixtures/mock_fifo_failure.json`
+  until the real engines exist. Fixture causal data is hand-authored, not analysis.
+- Propose interface changes explicitly and coordinate them with the team before
   changing dependent modules. Keep the spec, fixtures, and tests consistent.
 - Do not silently convert X/Z to integers, round timestamps, assume a fixed
   clock period, or infer simulator scheduling phases from VCD record order.
@@ -31,5 +31,5 @@
 - End-to-end, once present: `uv run pytest tests/test_e2e_benchmarks.py -v`
 - Frontend, once scaffolded: `npm --prefix ui run build`
 
-During bootstrap there are no test cases; pytest exits 5 for no tests collected.
-Report that accurately. Do not add trivial tests to conceal absent coverage.
+The contract tests cover shared models and the mock provider only. Do not add
+trivial tests to conceal absent engine coverage.
