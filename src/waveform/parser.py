@@ -84,9 +84,9 @@ def _timestamp(token: str, magnitude: int, unit: TimeUnit) -> int:
             f"timestamp has {len(significant)} digits, beyond MAX_TIME_PS (spec section 4)"
         )
     time_ps = to_picoseconds(int(significant or "0"), magnitude, unit)
-    # Coverage end must stay below MAX_TIME_PS, and any timestamp may be the last.
-    if time_ps >= MAX_TIME_PS:
-        raise UnsupportedTraceError(f"timestamp {time_ps} ps is not below MAX_TIME_PS (spec section 4)")
+    # Coverage ends 1 ps before the final timestamp, so it stays below the bound.
+    if time_ps > MAX_TIME_PS:
+        raise UnsupportedTraceError(f"timestamp {time_ps} ps is above MAX_TIME_PS (spec section 4)")
     return time_ps
 
 
@@ -442,10 +442,13 @@ class _Parser:
             raise InvalidTraceError(f"trace ends inside an unterminated {open_block} block")
         if time is None or first_time is None:
             raise InvalidTraceError("trace contains no simulation time")
-        if dumping:
-            flush()
-        else:
-            gaps.append((gap_start, time + 1))
+        if time == first_time:
+            raise InvalidTraceError("trace has fewer than two distinct timestamps")
+        # Spec 9 (decision 11): VCD has no end marker, so the final timestep is
+        # never known complete. Its records are discarded (pending is not
+        # flushed) and coverage ends 1 ps before it.
+        if not dumping and gap_start < time:
+            gaps.append((gap_start, time))
 
         merged: list[tuple[int, int]] = []
         for start, end in gaps:
@@ -454,7 +457,7 @@ class _Parser:
             else:
                 merged.append((start, end))
         unavailable = tuple(TimeInterval(start_ps=start, end_ps=end) for start, end in merged)
-        return TraceCoverage(start_ps=first_time, end_ps=time), unavailable
+        return TraceCoverage(start_ps=first_time, end_ps=time - 1), unavailable
 
 
 def parse_vcd(text: str, *, keep: Sequence[str] | None = None) -> ParsedTrace:
@@ -466,10 +469,18 @@ def parse_vcd(text: str, *, keep: Sequence[str] | None = None) -> ParsedTrace:
     shared with a kept path is kept. Coverage and dump gaps are unaffected, and
     the ``$dumpon`` restate check applies to kept signals only.
 
-    Raises ``InvalidTraceError`` for malformed or inconsistent input,
-    ``UnsupportedPrecisionError`` when a timestamp is not a whole picosecond,
-    and ``InvalidQueryError`` for a malformed or unmatched ``keep`` pattern.
+    Coverage ends 1 ps before the final timestamp, whose records are not
+    exposed: a VCD timestep is known complete only when a later timestamp
+    follows it (spec section 9, decision 11).
+
+    Raises ``InvalidTraceError`` for malformed or inconsistent input, including
+    text that does not end with a newline or has fewer than two distinct
+    timestamps; ``UnsupportedPrecisionError`` when a timestamp is not a whole
+    picosecond; and ``InvalidQueryError`` for a malformed or unmatched ``keep``
+    pattern.
     """
+    if not text.endswith("\n"):
+        raise InvalidTraceError("trace does not end with a newline; it may be truncated")
     return _Parser(text, keep).parse()
 
 
