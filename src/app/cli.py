@@ -5,8 +5,10 @@
     python -m src.app.cli open REPORT_JSON
 
 Exit codes follow spec.md section 8.4: 0 pass, 1 fail, 2 invalid_input or
-error, 3 unsupported or inconclusive. Ctrl-C cancels a running job and reaps
-the simulator's process group.
+error, 3 unsupported or inconclusive. Ctrl-C cancels a running simulation and
+reaps its process group; Track A's comparison step does not poll for
+cancellation, so Ctrl-C takes effect after it (bounded by --fst-timeout for
+FST traces).
 
 ``analyze`` compares with Track A's waveform engine by default
 (``--comparison track-a``); ``--comparison self-check`` uses the labeled
@@ -29,6 +31,7 @@ from src.app.adapters import ComparisonAdapter, FixtureCausal, SelfCheckComparis
 from src.app.runner import Limits, Runner
 from src.app.service import EXIT_CODES, AnalysisOutcome, AnalysisService, load_report
 from src.contracts import AnalysisStatus
+from src.waveform.cache import DEFAULT_CACHE_DIR
 from src.waveform.options import (
     DEFAULT_FST_TIMEOUT_S,
     WaveformOptions,
@@ -65,7 +68,7 @@ def _parser() -> argparse.ArgumentParser:
                          help="index only signals whose hierarchical path matches PATTERN "
                               "(* within a component, ** across components, ? one character); repeatable")
     analyze.add_argument("--cache-dir", type=Path, default=None, metavar="PATH",
-                         help="reuse parsed traces cached in PATH; off by default")
+                         help=f"reuse parsed traces cached in PATH (for example {DEFAULT_CACHE_DIR}/); off by default")
     analyze.add_argument("--fst-timeout", dest="fst_timeout_s", type=_seconds, default=DEFAULT_FST_TIMEOUT_S,
                          metavar="SECONDS",
                          help=f"time limit for converting an FST trace with fst2vcd (default {DEFAULT_FST_TIMEOUT_S:g})")
@@ -82,6 +85,8 @@ def _parser() -> argparse.ArgumentParser:
 
 def _seconds(text: str) -> float:
     # Reuse Track A's validation by building its options; keeps one definition.
+    # The dummy paths are never opened. If Track A starts validating paths in
+    # WaveformOptions, ask it to export its seconds parser and import that.
     try:
         return WaveformOptions(trace=Path("-"), golden=Path("-"), fst_timeout_s=float(text)).fst_timeout_s
     except ValueError:
@@ -103,6 +108,9 @@ def _summary(outcome: AnalysisOutcome) -> str:
                 f"expected {exp} actual {act}"
             )
         lines.append(line)
+        # Track A reports why a comparison could not run inside the result.
+        for d in result.diagnostics:
+            lines.append(f"    {d.code}: {d.message}")
     if outcome.causal is not None:
         kind = outcome.causal.provenance.kind.value
         lines.append(f"  causal: {len(outcome.causal.suspects)} ranked suspect(s) [{kind}]")
@@ -116,7 +124,8 @@ def _summary(outcome: AnalysisOutcome) -> str:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+    parser = _parser()
+    args = parser.parse_args(argv)
     if args.command == "open":
         try:
             data = load_report(args.report)
@@ -145,6 +154,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             keep=tuple(args.keep or ()), cache_dir=args.cache_dir, fst_timeout_s=args.fst_timeout_s
         )
     else:
+        ignored = [flag for flag, value, default in (
+            ("--keep", args.keep, None), ("--cache-dir", args.cache_dir, None),
+            ("--fst-timeout", args.fst_timeout_s, DEFAULT_FST_TIMEOUT_S),
+        ) if value != default]
+        if ignored:
+            parser.error(f"{', '.join(ignored)} apply only to --comparison track-a")
         comparison = SelfCheckComparison()
     causal = FixtureCausal(args.fixture_causal) if args.fixture_causal else None
     service = AnalysisService(

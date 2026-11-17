@@ -97,8 +97,13 @@ class WaveformComparison:
             raise AdapterError("the run produced no trace to compare")
         if run.run_dir is None:
             raise AdapterError("the run has no run directory to hold the golden")
+        # The service already saves the rebased golden here; writing it again
+        # keeps the adapter usable on its own and guarantees Track A compares
+        # exactly the golden it was handed.
         golden_path = run.run_dir / f"golden_{golden.header.mode.value}.jsonl"
-        golden_path.write_text(golden.to_jsonl())
+        text = golden.to_jsonl()
+        if not golden_path.exists() or golden_path.read_text() != text:
+            golden_path.write_text(text)
         return run_comparison(
             WaveformOptions(
                 trace=run.trace,

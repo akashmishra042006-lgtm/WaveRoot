@@ -33,12 +33,6 @@ def _record(run_dir: Path | None, trace: Path | None) -> RunRecord:
     return RunRecord(status=RunStatus.OK, run_dir=run_dir, message="ok", trace=trace)
 
 
-def test_adapter_is_labeled_as_analysis() -> None:
-    adapter = WaveformComparison()
-    assert adapter.kind == "analysis"
-    assert adapter.name != SelfCheckComparison.name
-
-
 def test_adapter_refuses_a_run_without_a_trace(tmp_path: Path) -> None:
     golden = _any_golden()
     with pytest.raises(AdapterError, match="trace"):
@@ -74,6 +68,7 @@ def test_adapter_writes_golden_and_forwards_options(
 
 def test_adapter_defaults_match_track_a() -> None:
     adapter = WaveformComparison()
+    assert adapter.kind == "analysis"
     assert adapter.keep == ()
     assert adapter.cache_dir is None
     assert adapter.fst_timeout_s == DEFAULT_FST_TIMEOUT_S
@@ -120,12 +115,54 @@ def test_compare_reports_unreadable_trace_as_error_exit(
     golden.write_text(_any_golden().to_jsonl())
     code = cli.main(["compare", "--trace", str(tmp_path / "missing.vcd"), "--golden", str(golden)])
     result = ComparisonResult.model_validate_json(capsys.readouterr().out)
-    assert result.status.value in {"error", "invalid_input"}
+    assert result.status.value == "error"
+    assert [d.code for d in result.diagnostics] == ["FILE_UNREADABLE"]
     assert code == 2
 
 
-def test_selfcheck_comparison_is_still_available_and_labeled() -> None:
-    assert SelfCheckComparison.kind == "benchmark_self_check"
+def test_analyze_passes_track_a_options_to_the_adapter(monkeypatch: pytest.MonkeyPatch) -> None:
+    built: list[WaveformComparison] = []
+
+    class SpyService:
+        def __init__(self, runner: object, comparison: object, causal: object, *, fixture_mode: bool) -> None:
+            assert isinstance(comparison, WaveformComparison)
+            built.append(comparison)
+
+        def analyze(self, *args: object, **kwargs: object) -> object:
+            raise SystemExit(0)
+
+    monkeypatch.setattr(cli, "AnalysisService", SpyService)
+    with pytest.raises(SystemExit):
+        cli.main(["analyze", str(FIFO_MANIFEST), "--variant", "mutant", "--schedule", "directed",
+                  "--keep", "TOP.**", "--cache-dir", "/tmp/c", "--fst-timeout", "4"])
+    (adapter,) = built
+    assert adapter.keep == ("TOP.**",)
+    assert adapter.cache_dir == Path("/tmp/c")
+    assert adapter.fst_timeout_s == 4.0
+
+
+def test_self_check_refuses_track_a_only_options() -> None:
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["analyze", str(FIFO_MANIFEST), "--variant", "mutant", "--schedule", "directed",
+                  "--comparison", "self-check", "--keep", "TOP.**"])
+    assert exc.value.code == 2
+
+
+def test_summary_prints_comparison_diagnostics() -> None:
+    from src.app.service import AnalysisOutcome
+    from src.contracts import AnalysisStatus, Diagnostic
+
+    result = ComparisonResult(
+        schema_version=1, status=AnalysisStatus.INVALID_INPUT, mode=ComparisonMode.CYCLE,
+        compared_values=0, failure=None,
+        diagnostics=[Diagnostic(code="SELECTION_INVALID", message="pattern 'x' matches no signal path")],
+    )
+    outcome = AnalysisOutcome(
+        status=AnalysisStatus.INVALID_INPUT, case_id="c", variant="mutant", schedule="directed",
+        fixture_mode=False, comparison_adapter=("track_a_waveform", "analysis"), causal_adapter=None,
+        comparisons={ComparisonMode.CYCLE: result},
+    )
+    assert "SELECTION_INVALID: pattern 'x' matches no signal path" in cli._summary(outcome)
 
 
 def _any_golden() -> GoldenTrace:
