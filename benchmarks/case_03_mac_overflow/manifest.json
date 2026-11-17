@@ -98,5 +98,12 @@
     "actual": "0100010010000000",
     "additional_mismatches": [],
     "note": "the internal accumulator diverges one cycle earlier (acc_q at cycle 2); that is diagnostic evidence, not the first declared output mismatch"
+  },
+  "golden": {
+    "module": "benchmarks.case_03_mac_overflow.golden_model",
+    "modes": [
+      "cycle"
+    ],
+    "primary_mode": "cycle"
   }
 }

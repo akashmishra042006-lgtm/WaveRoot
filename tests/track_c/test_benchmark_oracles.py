@@ -349,3 +349,43 @@ def test_grader_spans_match_hashes(case) -> None:
         lines = path.read_text().splitlines()
         snippet = "\n".join(lines[span["start_line"] - 1 : span["end_line"]])
         assert snippet.strip(), "span points at empty lines"
+
+
+class TestResetCancellation:
+    """Expectations cancelled by a reset are not waived (PR #8 decision 10)."""
+
+    def _reset_at_cycle_4(self):
+        return synthetic_edges("case_01_fifo_wrap", {(65000, "pre"): {"rst_n": "0"}})
+
+    def test_cycle_mode_epoch_ended_early(self) -> None:
+        cycle, edges = self._reset_at_cycle_4()
+        result = benchlib.check_cycle(cycle, edges)
+        assert result.status is AnalysisStatus.INCONCLUSIVE
+        assert [d.code for d in result.diagnostics] == ["EPOCH_ENDED_EARLY"]
+
+    def test_handshake_mode_expectations_cancelled(self) -> None:
+        case = case_by_id("case_01_fifo_wrap")
+        _, hs = case.golden.goldens_for(case.stim("directed"))
+        assert hs is not None
+        _, edges = self._reset_at_cycle_4()
+        result = benchlib.check_handshake(hs, edges)
+        assert result.status is AnalysisStatus.INCONCLUSIVE
+        assert [d.code for d in result.diagnostics] == ["EXPECTATIONS_CANCELLED_BY_RESET"]
+
+    def test_failure_before_the_reset_still_fails(self) -> None:
+        cycle, edges = synthetic_edges(
+            "case_01_fifo_wrap",
+            {(55000, "settled"): {"full": "0"}, (65000, "pre"): {"rst_n": "0"}},
+        )
+        result = benchlib.check_cycle(cycle, edges)
+        assert result.status is AnalysisStatus.FAIL
+        assert result.failure is not None and result.failure.observation.time_ps == 55000
+
+
+def test_nothing_compared_is_inconclusive() -> None:
+    from src.app.selfcheck import _pass_or_nothing
+    from src.contracts import ComparisonMode
+
+    result = _pass_or_nothing(ComparisonMode.CYCLE, 0)
+    assert result.status is AnalysisStatus.INCONCLUSIVE
+    assert result.diagnostics[0].code == "NOTHING_COMPARED"

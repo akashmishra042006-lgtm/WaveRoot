@@ -88,5 +88,12 @@
     "actual": "xxxxxxxx",
     "additional_mismatches": [],
     "note": "requires a genuine four-state simulator; a Verilator randomized-initialization run does not satisfy the gate (spec.md section 13)"
+  },
+  "golden": {
+    "module": "benchmarks.case_04_alu_xprop.golden_model",
+    "modes": [
+      "cycle"
+    ],
+    "primary_mode": "cycle"
   }
 }
