@@ -32,6 +32,7 @@ from src.app.runner import (
     resolve_inside,
 )
 from src.app.selfcheck import ObservedFormatError
+from src.app.tracepaths import rebase_golden
 from src.contracts import (
     AnalysisStatus,
     CausalReport,
@@ -314,6 +315,9 @@ class AnalysisService:
         outcome.run = run
         if run.status is not RunStatus.OK:
             return stop(_RUN_STATUS_MAP[run.status], run.status.name, run.message)
+        # Map canonical golden paths onto this trace's hierarchy (spec 3.1) so
+        # every anchor resolves in the trace it came from (spec 5.1).
+        goldens = {mode: rebase_golden(g, run.trace_scope_prefix or "") for mode, g in goldens.items()}
         if run.run_dir is not None:
             for mode, golden in goldens.items():
                 (run.run_dir / f"golden_{mode.value}.jsonl").write_text(golden.to_jsonl())

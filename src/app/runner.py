@@ -37,6 +37,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import IO, Final, Literal
 
+from src.app.tracepaths import TraceHierarchyError, detect_trace_prefix
+
 Simulator = Literal["verilator", "icarus"]
 
 SIMULATOR_TOOLS: Final[Mapping[Simulator, tuple[str, ...]]] = {
@@ -106,6 +108,7 @@ class RunRecord:
     trace: Path | None = None
     observed: Path | None = None
     trace_sha256: str | None = None
+    trace_scope_prefix: str | None = None
 
     def to_json(self) -> dict[str, object]:
         """Provenance as JSON-ready data. Wall-clock durations are kept here,
@@ -131,6 +134,7 @@ class RunRecord:
             "inputs_sha256": dict(sorted(self.inputs_sha256.items())),
             "trace": self.trace.name if self.trace else None,
             "trace_sha256": self.trace_sha256,
+            "trace_scope_prefix": self.trace_scope_prefix,
         }
 
 
@@ -262,6 +266,12 @@ class Runner:
             record.status = RunStatus.ARTIFACT_LIMIT
             record.message = f"trace exceeds {self.limits.max_trace_bytes} bytes"
             return record
+        try:
+            record.trace_scope_prefix = detect_trace_prefix(trace)
+        except (TraceHierarchyError, OSError) as exc:
+            record.status = RunStatus.TRACE_MISSING
+            record.message = f"trace hierarchy not usable: {exc}"
+            return record
         record.trace = trace
         record.observed = observed
         record.trace_sha256 = sha256_file(trace)
@@ -340,7 +350,7 @@ class Runner:
         capture = _CappedCapture(proc.stdout, cwd / log_name, self.limits.max_log_bytes)
         capture.start()
         outcome: tuple[RunStatus, str] | None = None
-        while proc.poll() is None:
+        while not _exited(proc.pid):
             if cancel.is_set():
                 outcome = (RunStatus.CANCELLED, f"{name} cancelled")
             elif time.monotonic() > deadline:
@@ -355,12 +365,10 @@ class Runner:
                 _terminate_group(proc)
                 break
             time.sleep(_POLL_S)
+        # Nothing the step spawned may outlive it. The leader is still unreaped
+        # here, so this cannot signal an unrelated group; reap only afterwards.
+        _signal_group(proc.pid, signal.SIGKILL)
         proc.wait()
-        # Even after a normal exit, nothing the step spawned may outlive it.
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            pass
         capture.join()
         step = StepRecord(
             name=name,
@@ -374,23 +382,36 @@ class Runner:
         return Runner._Execution(step, outcome, capture.saw_tb_error)
 
 
+def _exited(pid: int) -> bool:
+    """True once ``pid`` has exited, without reaping it.
+
+    Leaving the leader an unreaped zombie keeps its process-group ID reserved,
+    so a later ``killpg`` can never reach an unrelated group that reused it.
+    """
+    try:
+        return os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
+    except ChildProcessError:
+        return True
+
+
+def _signal_group(pgid: int, sig: signal.Signals) -> None:
+    try:
+        os.killpg(pgid, sig)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
 def _terminate_group(proc: subprocess.Popen[bytes]) -> None:
-    """SIGTERM the whole process group, then SIGKILL whatever survives."""
-    for sig, grace in ((signal.SIGTERM, _KILL_GRACE_S), (signal.SIGKILL, _KILL_GRACE_S)):
-        try:
-            os.killpg(proc.pid, sig)
-        except ProcessLookupError:
-            return
-        try:
-            proc.wait(timeout=grace)
-        except subprocess.TimeoutExpired:
-            continue
-        # The leader is gone; make sure no member of its group remains.
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        return
+    """SIGTERM the whole process group, then SIGKILL whatever survives.
+
+    Never reaps the leader: the caller kills the group once more and only then
+    reaps, so the group ID stays reserved throughout.
+    """
+    _signal_group(proc.pid, signal.SIGTERM)
+    deadline = time.monotonic() + _KILL_GRACE_S
+    while not _exited(proc.pid) and time.monotonic() < deadline:
+        time.sleep(_POLL_S)
+    _signal_group(proc.pid, signal.SIGKILL)
 
 
 class _CappedCapture(threading.Thread):

@@ -341,43 +341,7 @@ def run_simulation(
 # --------------------------------------------------------------------------
 
 
-def vcd_declared_paths(vcd: Path) -> set[str]:
-    """Signal paths declared in the VCD header, as dotted hierarchy names."""
-    paths: set[str] = set()
-    stack: list[str] = []
-    with vcd.open() as fh:
-        for line in fh:
-            tok = line.split()
-            if not tok:
-                continue
-            if tok[0] == "$scope" and len(tok) >= 3:
-                stack.append(tok[2])
-            elif tok[0] == "$upscope":
-                if stack:
-                    stack.pop()
-            elif tok[0] == "$var" and len(tok) >= 5:
-                name = tok[4]
-                paths.add(".".join([*stack, name]))
-            elif tok[0] == "$enddefinitions":
-                break
-    return paths
-
-
-def detect_trace_prefix(vcd: Path, canonical: str = "tb.dut.clk") -> str:
-    """The scope prefix the simulator prepended to the canonical hierarchy.
-
-    Verilator wraps the design in a ``TOP`` scope (prefix ``"TOP."``); Icarus
-    dumps ``tb.dut.*`` directly (prefix ``""``). The canonical ``tb.dut.*``
-    paths in manifests and golden headers map to trace paths by prepending the
-    returned prefix; the mapping is recorded per run, never assumed.
-    """
-    declared = vcd_declared_paths(vcd)
-    suffix = canonical
-    matches = sorted(p for p in declared if p == suffix or p.endswith("." + suffix))
-    if not matches:
-        raise ValueError(f"{vcd}: no declared path matches {canonical!r}")
-    path = matches[0]
-    return "" if path == suffix else path[: -len(suffix)]
+from src.app.tracepaths import detect_trace_prefix, rebase_golden, vcd_declared_paths  # noqa: E402
 
 
 def vcd_body_has_unknown(vcd: Path) -> bool:
@@ -396,36 +360,6 @@ def vcd_body_has_unknown(vcd: Path) -> bool:
             if "x" in value or "z" in value:
                 return True
     return False
-
-
-def rebase_golden(trace: GoldenTrace, prefix: str) -> GoldenTrace:
-    """Map a golden trace's canonical ``tb.dut.*`` paths onto a run's trace
-    hierarchy (spec.md section 3.1: Track C supplies this mapping).
-
-    Golden models stay simulator-independent and emit canonical paths; each
-    run detects its scope prefix (``detect_trace_prefix``) — ``"TOP."`` for
-    Verilator, ``""`` for Icarus — and the comparison uses the rebased paths,
-    so every failure anchor resolves in the trace it came from (section 5.1).
-    """
-    if not prefix:
-        return trace
-    if not prefix.endswith(".") or prefix.startswith("."):
-        raise ValueError(f"invalid scope prefix {prefix!r}")
-    h = trace.header
-    signals = tuple(s.model_copy(update={"path": prefix + s.path}) for s in h.signals)
-    header = h.model_copy(
-        update={
-            "clock": prefix + h.clock,
-            "reset": prefix + h.reset,
-            "signals": signals,
-            "valid": prefix + h.valid if h.valid else None,
-            "ready": prefix + h.ready if h.ready else None,
-        }
-    )
-    # Round-trip through the canonical parser so the result is fully validated.
-    from src.contracts import parse_golden_jsonl
-
-    return parse_golden_jsonl(GoldenTrace(header=header, records=trace.records).to_jsonl())
 
 
 def write_jsonl(trace: GoldenTrace, path: Path) -> None:
