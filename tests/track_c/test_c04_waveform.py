@@ -80,7 +80,7 @@ def test_analyze_defaults_to_track_a_and_accepts_track_a_options() -> None:
     )
     assert args.comparison == "track-a"
     assert args.keep is None and args.cache_dir is None
-    assert args.fst_timeout_s == DEFAULT_FST_TIMEOUT_S
+    assert args.fst_timeout_s is None  # resolved to DEFAULT_FST_TIMEOUT_S when the adapter is built
     args = cli._parser().parse_args(
         ["analyze", str(FIFO_MANIFEST), "--variant", "mutant", "--schedule", "directed",
          "--comparison", "self-check", "--keep", "a.*", "--keep", "b.**",
@@ -141,11 +141,37 @@ def test_analyze_passes_track_a_options_to_the_adapter(monkeypatch: pytest.Monke
     assert adapter.fst_timeout_s == 4.0
 
 
-def test_self_check_refuses_track_a_only_options() -> None:
+@pytest.mark.parametrize("option", [["--keep", "TOP.**"], ["--cache-dir", "/tmp/c"],
+                                    ["--fst-timeout", str(DEFAULT_FST_TIMEOUT_S)]])
+def test_self_check_refuses_track_a_only_options(option: list[str]) -> None:
+    """Even an explicit value equal to Track A's default is refused."""
     with pytest.raises(SystemExit) as exc:
         cli.main(["analyze", str(FIFO_MANIFEST), "--variant", "mutant", "--schedule", "directed",
-                  "--comparison", "self-check", "--keep", "TOP.**"])
+                  "--comparison", "self-check", *option])
     assert exc.value.code == 2
+
+
+def test_default_fst_timeout_reaches_the_adapter(monkeypatch: pytest.MonkeyPatch) -> None:
+    built: list[WaveformComparison] = []
+
+    class Spy:
+        def __init__(self, runner: object, comparison: WaveformComparison, causal: object, *, fixture_mode: bool) -> None:
+            built.append(comparison)
+
+        def analyze(self, *a: object, **k: object) -> object:
+            raise SystemExit(0)
+
+    monkeypatch.setattr(cli, "AnalysisService", Spy)
+    with pytest.raises(SystemExit):
+        cli.main(["analyze", str(FIFO_MANIFEST), "--variant", "mutant", "--schedule", "directed"])
+    assert built[0].fst_timeout_s == DEFAULT_FST_TIMEOUT_S
+
+
+def test_adapter_reports_an_unwritable_run_dir_as_adapter_error(tmp_path: Path) -> None:
+    run_dir = tmp_path / "not-a-dir"
+    run_dir.write_text("a file, not a directory")
+    with pytest.raises(AdapterError, match="cannot write the golden"):
+        WaveformComparison().compare(_any_golden(), _record(run_dir, MOCK_VCD))
 
 
 def test_summary_prints_comparison_diagnostics() -> None:

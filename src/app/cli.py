@@ -3,12 +3,13 @@
     python -m src.app.cli analyze MANIFEST --variant mutant --schedule directed
     python -m src.app.cli compare --trace TRACE --golden GOLDEN
     python -m src.app.cli open REPORT_JSON
+    python -m src.app.cli serve [--root benchmarks] [--port 8765]
 
 Exit codes follow spec.md section 8.4: 0 pass, 1 fail, 2 invalid_input or
 error, 3 unsupported or inconclusive. Ctrl-C cancels a running simulation and
-reaps its process group; Track A's comparison step does not poll for
-cancellation, so Ctrl-C takes effect after it (bounded by --fst-timeout for
-FST traces).
+reaps its process group. A comparison step already in progress finishes first;
+the cancel then stops the run as ``error``/``CANCELLED`` before any verdict.
+``--timeout`` covers the simulation, not the comparison.
 
 ``analyze`` compares with Track A's waveform engine by default
 (``--comparison track-a``); ``--comparison self-check`` uses the labeled
@@ -20,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import signal
 import sys
 import threading
@@ -27,6 +29,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from types import FrameType
 
+from src.app.api import DEFAULT_DEV_ORIGINS, ApiConfig, ApiServer
 from src.app.adapters import ComparisonAdapter, FixtureCausal, SelfCheckComparison, WaveformComparison
 from src.app.runner import Limits, Runner
 from src.app.service import EXIT_CODES, AnalysisOutcome, AnalysisService, load_report
@@ -66,16 +69,33 @@ def _parser() -> argparse.ArgumentParser:
     # here because it requires --trace/--golden, which analyze produces itself.
     analyze.add_argument("--keep", action="append", default=None, metavar="PATTERN",
                          help="index only signals whose hierarchical path matches PATTERN "
-                              "(* within a component, ** across components, ? one character); repeatable")
+                              "(* within a component, ** across components, ? one character); repeatable. "
+                              "Patterns match the trace's own paths (Verilator adds TOP., e.g. 'TOP.tb.**'); "
+                              "excluding a compared signal is invalid_input, never a pass")
     analyze.add_argument("--cache-dir", type=Path, default=None, metavar="PATH",
                          help=f"reuse parsed traces cached in PATH (for example {DEFAULT_CACHE_DIR}/); off by default")
-    analyze.add_argument("--fst-timeout", dest="fst_timeout_s", type=_seconds, default=DEFAULT_FST_TIMEOUT_S,
+    analyze.add_argument("--fst-timeout", dest="fst_timeout_s", type=_seconds, default=None,
                          metavar="SECONDS",
-                         help=f"time limit for converting an FST trace with fst2vcd (default {DEFAULT_FST_TIMEOUT_S:g})")
+                         help="time limit for converting an FST trace with fst2vcd "
+                              f"(default {DEFAULT_FST_TIMEOUT_S:g}); benchmark runs write VCD, so it "
+                              "applies only to FST traces")
     analyze.add_argument("--json", action="store_true", help="print the run record as JSON")
 
     compare = sub.add_parser("compare", help="compare a saved trace with a golden using Track A's engine")
     add_waveform_arguments(compare)
+
+    serve = sub.add_parser("serve", help="start the local API (127.0.0.1 only)")
+    serve.add_argument("--root", type=Path, default=Path("benchmarks"),
+                       help="directory holding the benchmark cases the API may run")
+    serve.add_argument("--artifacts", type=Path, default=DEFAULT_ARTIFACTS)
+    serve.add_argument("--host", default="127.0.0.1", help="a loopback IPv4 address")
+    serve.add_argument("--port", type=int, default=8765)
+    serve.add_argument("--allow-origin", action="append", default=[], metavar="ORIGIN",
+                       help="extra web origin allowed to call the API; repeatable")
+    serve.add_argument("--dev", action="store_true",
+                       help="also allow the Vite dev/preview origins (" + ", ".join(DEFAULT_DEV_ORIGINS) + ")")
+    serve.add_argument("--timeout", type=float, default=180.0, help="wall-clock seconds per job")
+    serve.add_argument("--jobs", type=int, default=1, help="jobs that may run at once")
 
     open_ = sub.add_parser("open", help="validate and summarize a saved run record")
     open_.add_argument("report", type=Path)
@@ -143,6 +163,22 @@ def main(argv: Sequence[str] | None = None) -> int:
                     print(f"  {diag.get('code')}: {diag.get('message')}")
         return EXIT_CODES[status]
 
+    if args.command == "serve":
+        try:
+            server = ApiServer(ApiConfig(
+                root=args.root, artifacts=args.artifacts, host=args.host, port=args.port,
+                extra_origins=tuple(args.allow_origin) + (DEFAULT_DEV_ORIGINS if args.dev else ()),
+                timeout_s=args.timeout, max_concurrent=args.jobs,
+            ))
+        except (ValueError, OSError) as exc:
+            print(f"cannot start the API: {exc}", file=sys.stderr)
+            return 2
+        logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+        print(f"WaveRoot API on {server.origin}  (cases under {args.root}; Ctrl-C to stop)", flush=True)
+        print("allowed origins: " + ", ".join(sorted(server.allowed_origins())), flush=True)
+        server.serve_forever()
+        return 0
+
     if args.command == "compare":
         result = run_comparison(options_from_namespace(args))
         print(result.model_dump_json(indent=2))
@@ -151,12 +187,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     comparison: ComparisonAdapter
     if args.comparison == "track-a":
         comparison = WaveformComparison(
-            keep=tuple(args.keep or ()), cache_dir=args.cache_dir, fst_timeout_s=args.fst_timeout_s
+            keep=tuple(args.keep or ()), cache_dir=args.cache_dir,
+            fst_timeout_s=DEFAULT_FST_TIMEOUT_S if args.fst_timeout_s is None else args.fst_timeout_s,
         )
     else:
         ignored = [flag for flag, value, default in (
             ("--keep", args.keep, None), ("--cache-dir", args.cache_dir, None),
-            ("--fst-timeout", args.fst_timeout_s, DEFAULT_FST_TIMEOUT_S),
+            ("--fst-timeout", args.fst_timeout_s, None),
         ) if value != default]
         if ignored:
             parser.error(f"{', '.join(ignored)} apply only to --comparison track-a")

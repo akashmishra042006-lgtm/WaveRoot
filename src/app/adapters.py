@@ -102,8 +102,11 @@ class WaveformComparison:
         # exactly the golden it was handed.
         golden_path = run.run_dir / f"golden_{golden.header.mode.value}.jsonl"
         text = golden.to_jsonl()
-        if not golden_path.exists() or golden_path.read_text() != text:
-            golden_path.write_text(text)
+        try:
+            if not golden_path.exists() or golden_path.read_text() != text:
+                golden_path.write_text(text)
+        except OSError as exc:
+            raise AdapterError(f"cannot write the golden for Track A: {exc}") from exc
         return run_comparison(
             WaveformOptions(
                 trace=run.trace,
