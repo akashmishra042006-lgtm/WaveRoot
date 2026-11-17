@@ -183,6 +183,14 @@ function comparison(value: unknown, where: string): ComparisonResult {
     diagnostics: diagnostics(o.diagnostics, `${where}.diagnostics`),
   };
   if ((status === "fail") !== (failure !== null)) fail(where, "a failure is present exactly when status is fail");
+  if (failure && failure.mode !== result.mode) fail(where, "failure mode differs from the comparison mode");
+  if (!failure && result.additional_mismatches.length) fail(where, "additional mismatches require a failure");
+  for (const other of result.additional_mismatches) {
+    if (!failure || !sameObservation(other.observation, failure.observation) || other.mode !== result.mode) {
+      fail(where, "additional mismatches must share the failing observation");
+    }
+    if (other.signal_path === failure.signal_path) fail(where, "additional mismatch repeats the anchor signal");
+  }
   if (status !== "pass" && status !== "fail" && result.diagnostics.length === 0) {
     fail(where, `a ${status} result must carry a diagnostic`);
   }
@@ -291,6 +299,13 @@ export function causalReport(value: unknown, where = "report"): CausalReport {
     return node;
   });
   unique(nodes.map((n) => n.id), "node");
+  const edgeTimes = new Map<string, bigint>();
+  for (const n of nodes) {
+    const key = `${n.observation.epoch}:${n.observation.cycle}`;
+    const known = edgeTimes.get(key);
+    if (known === undefined) edgeTimes.set(key, n.observation.time_ps);
+    else if (known !== n.observation.time_ps) fail(`report.nodes`, `node ${n.id}: cycle maps to two different edge times`);
+  }
   const byId = new Map(nodes.map((n) => [n.id, n]));
 
   const edges: CausalEdge[] = (o.edges === undefined ? [] : array(o.edges, `${where}.edges`)).map((e, i) => {
@@ -305,8 +320,22 @@ export function causalReport(value: unknown, where = "report"): CausalReport {
       branch: oneOf(eo.branch, ["retained", "pruned", "unknown"] as readonly BranchStatus[], `${w}.branch`),
       reason: str(eo.reason, `${w}.reason`),
     };
-    if (!byId.has(edge.source) || !byId.has(edge.target)) {
-      fail(w, `dangling node reference (${edge.source} -> ${edge.target})`);
+    const s = byId.get(edge.source);
+    const tgt = byId.get(edge.target);
+    if (!s || !tgt) fail(w, `dangling node reference (${edge.source} -> ${edge.target})`);
+    if (s === tgt) fail(w, "self-loop");
+    const so = s.observation;
+    const to = tgt.observation;
+    if (edge.edge_type === "sequential") {
+      const sameEdge = so.epoch === to.epoch && so.cycle === to.cycle && so.time_ps === to.time_ps;
+      if (!sameEdge || so.phase !== "before" || to.phase !== "settled") {
+        fail(w, "a sequential edge runs from before to settled at one clock edge");
+      }
+    } else if (!sameObservation(so, to)) {
+      const carry = s.signal_path === tgt.signal_path && so.epoch === to.epoch && so.phase === "settled" &&
+        to.phase === "before" && so.cycle < to.cycle &&
+        (s.value === null || tgt.value === null || s.value.bits === tgt.value.bits);
+      if (!carry) fail(w, "a combinational edge stays in one observation or carries one unchanged signal");
     }
     return edge;
   });
@@ -372,6 +401,9 @@ export function causalReport(value: unknown, where = "report"): CausalReport {
     if (!anchor || !failure) fail(where, "a graph requires anchor_node_id naming an existing node");
     if (anchor.signal_path !== failure.signal_path || !sameObservation(anchor.observation, failure.observation)) {
       fail(where, "anchor node does not match the failure signal and observation");
+    }
+    if ((anchor.value?.bits ?? null) !== (failure.actual?.bits ?? null)) {
+      fail(where, "anchor node value differs from the failure's actual value");
     }
   }
   return report;

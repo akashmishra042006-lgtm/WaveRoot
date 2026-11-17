@@ -26,7 +26,7 @@
     "message": "build exceeded 0.05 s",
     "simulator": "verilator",
     "tool_version": "Verilator 5.020 2024-01-01 rev (Debian 5.020-1)",
-    "run_dir": "artifacts/case_01_fifo_wrap-mutant-directed-4cb9eb252855",
+    "run_dir": "artifacts/case_01_fifo_wrap-mutant-directed-033a42f62b60",
     "steps": [
       {
         "name": "build",
@@ -38,14 +38,14 @@
           "--top-module",
           "tb",
           "--Mdir",
-          "artifacts/case_01_fifo_wrap-mutant-directed-4cb9eb252855/obj",
+          "artifacts/case_01_fifo_wrap-mutant-directed-033a42f62b60/obj",
           "benchmarks/case_01_fifo_wrap/tb/tb.sv",
           "benchmarks/case_01_fifo_wrap/rtl/mutant/fifo.sv"
         ],
         "exit_code": -15,
-        "duration_s": 0.056,
+        "duration_s": 0.102,
         "log": "build.log",
-        "log_bytes_total": 666,
+        "log_bytes_total": 712,
         "log_truncated": false
       }
     ],
@@ -55,6 +55,7 @@
       "tb/tb.sv": "ff8d5926ee0f8f07659296ab0de39d77485b3f28248c8971d9d05aee4979f630"
     },
     "trace": null,
-    "trace_sha256": null
+    "trace_sha256": null,
+    "trace_scope_prefix": null
   }
 }

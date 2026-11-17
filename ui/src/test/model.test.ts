@@ -50,6 +50,33 @@ describe("validation", () => {
     expect(() => loadDocument(bad)).toThrow(/ranks must be exactly 1..N/);
   });
 
+  it("rejects an anchor node whose value differs from the failure's actual", () => {
+    const bad = structuredClone(mockFifo);
+    bad.report.nodes[0]!.value = { width: 1, bits: "1" };
+    expect(() => loadDocument(bad)).toThrow(/anchor node value differs/);
+  });
+
+  it("rejects a sequential edge that is not before -> settled at one edge", () => {
+    const bad = structuredClone(mockFifo);
+    const e03 = bad.report.edges.find((e) => e.id === "e03")!;
+    e03.source = "wptr.c2.settled";
+    expect(() => loadDocument(bad)).toThrow(/sequential edge runs from before to settled/);
+  });
+
+  it("rejects a combinational edge across observations that is not a carry", () => {
+    const bad = structuredClone(mockFifo);
+    const e01 = bad.report.edges.find((e) => e.id === "e01")!;
+    e01.source = "wptr.c2.settled";
+    expect(() => loadDocument(bad)).toThrow(/combinational edge stays in one observation/);
+  });
+
+  it("rejects an additional mismatch at a different observation", () => {
+    const bad = structuredClone(mockFifo);
+    const other = bad.comparison.additional_mismatches[0]!;
+    other.observation = { ...other.observation, cycle: 4, time_ps: "65000" };
+    expect(() => loadDocument(bad)).toThrow(/share the failing observation/);
+  });
+
   it("rejects an anchor node that does not match the failure", () => {
     const bad = structuredClone(mockFifo);
     bad.report.anchor_node_id = "wptr.c3.settled";

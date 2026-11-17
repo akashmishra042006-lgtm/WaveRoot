@@ -123,8 +123,6 @@ def make_real() -> None:
     runs = [
         ("real_fifo_pass.json", "case_01_fifo_wrap", "correct", []),
         ("real_fifo_fail.json", "case_01_fifo_wrap", "mutant", []),
-        ("real_fifo_fail_fixture_causal.json", "case_01_fifo_wrap", "mutant",
-         ["--fixture-causal", str(MOCK)]),
         ("real_alu_x.json", "case_04_alu_xprop", "mutant", []),
         # A genuine infrastructure error: the wall-clock limit expires mid-build.
         ("real_fifo_timeout.json", "case_01_fifo_wrap", "mutant", ["--timeout", "0.05"]),

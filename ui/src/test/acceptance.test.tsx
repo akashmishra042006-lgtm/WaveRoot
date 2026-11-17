@@ -61,14 +61,38 @@ describe("empty and sample labeling", () => {
     expect(screen.queryByTestId("sample-badge")).toBeNull();
   });
 
-  it("labels a real run that carries a synthetic causal report as sample data", async () => {
+  it("labels a run record that carries a synthetic causal report as sample data", async () => {
+    // In-test record: the mock fixture's comparison and causal report wrapped
+    // as a fixture-mode run record (the shape the CLI writes with --fixture-causal).
     const user = userEvent.setup();
     render(<App />);
-    await loadSample(user, /synthetic causal report/);
+    await uploadJson(user, fixtureRunRecord());
     expect(screen.getByTestId("sample-badge")).toBeInTheDocument();
     expect(screen.getByTestId("fixture-note")).toHaveTextContent("Not produced by a causal engine");
+    expect(screen.getByTestId("suspect-s1")).toBeInTheDocument();
+  });
+
+  it("rejects a record whose causal report describes a different failure", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const record = fixtureRunRecord();
+    (record.comparisons.cycle.failure as { signal_path: string }).signal_path = "TOP.tb.dut.full";
+    await uploadJson(user, record);
+    expect(screen.getByTestId("load-error")).toHaveTextContent(/disagree about the failure|anchor/);
   });
 });
+
+function fixtureRunRecord() {
+  const mock = structuredClone(mockFifo);
+  return {
+    record: "waveroot-track-c-run", record_version: 1, status: "fail", exit_code: 1,
+    case_id: "mock_fifo_wrap", variant: "mutant", schedule: "directed", fixture_mode: true,
+    comparison_adapter: { name: "fixture", kind: "synthetic_fixture" },
+    causal_adapter: { name: "fixture:mock_fifo_failure.json", kind: "synthetic_fixture" },
+    primary_mode: "cycle", comparisons: { cycle: mock.comparison }, causal: mock.report,
+    diagnostics: [], run: null,
+  };
+}
 
 describe("scenario 1: suspect selection synchronizes every panel", () => {
   it("selects node, signal, observation, source span, and time; the anchor stays tb.dut.full", async () => {

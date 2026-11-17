@@ -40,7 +40,7 @@
     "message": "build and simulation completed",
     "simulator": "verilator",
     "tool_version": "Verilator 5.020 2024-01-01 rev (Debian 5.020-1)",
-    "run_dir": "artifacts/case_01_fifo_wrap-correct-directed-fb41be739c97",
+    "run_dir": "artifacts/case_01_fifo_wrap-correct-directed-451e5dc08833",
     "steps": [
       {
         "name": "build",
@@ -52,12 +52,12 @@
           "--top-module",
           "tb",
           "--Mdir",
-          "artifacts/case_01_fifo_wrap-correct-directed-fb41be739c97/obj",
+          "artifacts/case_01_fifo_wrap-correct-directed-451e5dc08833/obj",
           "benchmarks/case_01_fifo_wrap/tb/tb.sv",
           "benchmarks/case_01_fifo_wrap/rtl/correct/fifo.sv"
         ],
         "exit_code": 0,
-        "duration_s": 5.82,
+        "duration_s": 6.671,
         "log": "build.log",
         "log_bytes_total": 3288,
         "log_truncated": false
@@ -65,10 +65,10 @@
       {
         "name": "simulate",
         "argv": [
-          "artifacts/case_01_fifo_wrap-correct-directed-fb41be739c97/obj/Vtb",
+          "artifacts/case_01_fifo_wrap-correct-directed-451e5dc08833/obj/Vtb",
           "+stim=benchmarks/case_01_fifo_wrap/stim/directed.stim",
-          "+obs=artifacts/case_01_fifo_wrap-correct-directed-fb41be739c97/observed.jsonl",
-          "+vcd=artifacts/case_01_fifo_wrap-correct-directed-fb41be739c97/trace.vcd",
+          "+obs=artifacts/case_01_fifo_wrap-correct-directed-451e5dc08833/observed.jsonl",
+          "+vcd=artifacts/case_01_fifo_wrap-correct-directed-451e5dc08833/trace.vcd",
           "+cycle_limit=64"
         ],
         "exit_code": 0,
@@ -84,6 +84,7 @@
       "tb/tb.sv": "ff8d5926ee0f8f07659296ab0de39d77485b3f28248c8971d9d05aee4979f630"
     },
     "trace": "trace.vcd",
-    "trace_sha256": "99bbe0ba051b36d8220da6de37b0df6aaee9113427f1510943a9efd646c624be"
+    "trace_sha256": "99bbe0ba051b36d8220da6de37b0df6aaee9113427f1510943a9efd646c624be",
+    "trace_scope_prefix": "TOP."
   }
 }

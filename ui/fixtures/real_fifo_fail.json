@@ -21,8 +21,8 @@
       "failure": {
         "kind": "value_mismatch",
         "mode": "cycle",
-        "signal_path": "tb.dut.full",
-        "clock_path": "tb.dut.clk",
+        "signal_path": "TOP.tb.dut.full",
+        "clock_path": "TOP.tb.dut.clk",
         "observation": {
           "epoch": 0,
           "cycle": 3,
@@ -44,8 +44,8 @@
         {
           "kind": "value_mismatch",
           "mode": "cycle",
-          "signal_path": "tb.dut.empty",
-          "clock_path": "tb.dut.clk",
+          "signal_path": "TOP.tb.dut.empty",
+          "clock_path": "TOP.tb.dut.clk",
           "observation": {
             "epoch": 0,
             "cycle": 3,
@@ -66,8 +66,8 @@
         {
           "kind": "value_mismatch",
           "mode": "cycle",
-          "signal_path": "tb.dut.out_valid",
-          "clock_path": "tb.dut.clk",
+          "signal_path": "TOP.tb.dut.out_valid",
+          "clock_path": "TOP.tb.dut.clk",
           "observation": {
             "epoch": 0,
             "cycle": 3,
@@ -96,8 +96,8 @@
       "failure": {
         "kind": "value_mismatch",
         "mode": "handshake",
-        "signal_path": "tb.dut.out_data",
-        "clock_path": "tb.dut.clk",
+        "signal_path": "TOP.tb.dut.out_data",
+        "clock_path": "TOP.tb.dut.clk",
         "observation": {
           "epoch": 0,
           "cycle": 5,
@@ -132,7 +132,7 @@
     "message": "build and simulation completed",
     "simulator": "verilator",
     "tool_version": "Verilator 5.020 2024-01-01 rev (Debian 5.020-1)",
-    "run_dir": "artifacts/case_01_fifo_wrap-mutant-directed-f83b5238f3fa",
+    "run_dir": "artifacts/case_01_fifo_wrap-mutant-directed-66003ef62773",
     "steps": [
       {
         "name": "build",
@@ -144,12 +144,12 @@
           "--top-module",
           "tb",
           "--Mdir",
-          "artifacts/case_01_fifo_wrap-mutant-directed-f83b5238f3fa/obj",
+          "artifacts/case_01_fifo_wrap-mutant-directed-66003ef62773/obj",
           "benchmarks/case_01_fifo_wrap/tb/tb.sv",
           "benchmarks/case_01_fifo_wrap/rtl/mutant/fifo.sv"
         ],
         "exit_code": 0,
-        "duration_s": 5.968,
+        "duration_s": 7.068,
         "log": "build.log",
         "log_bytes_total": 3286,
         "log_truncated": false
@@ -157,10 +157,10 @@
       {
         "name": "simulate",
         "argv": [
-          "artifacts/case_01_fifo_wrap-mutant-directed-f83b5238f3fa/obj/Vtb",
+          "artifacts/case_01_fifo_wrap-mutant-directed-66003ef62773/obj/Vtb",
           "+stim=benchmarks/case_01_fifo_wrap/stim/directed.stim",
-          "+obs=artifacts/case_01_fifo_wrap-mutant-directed-f83b5238f3fa/observed.jsonl",
-          "+vcd=artifacts/case_01_fifo_wrap-mutant-directed-f83b5238f3fa/trace.vcd",
+          "+obs=artifacts/case_01_fifo_wrap-mutant-directed-66003ef62773/observed.jsonl",
+          "+vcd=artifacts/case_01_fifo_wrap-mutant-directed-66003ef62773/trace.vcd",
           "+cycle_limit=64"
         ],
         "exit_code": 0,
@@ -176,6 +176,7 @@
       "tb/tb.sv": "ff8d5926ee0f8f07659296ab0de39d77485b3f28248c8971d9d05aee4979f630"
     },
     "trace": "trace.vcd",
-    "trace_sha256": "8a9b43d8072430d51dee40f9596586336e794652bc0ffc534a123719021b263f"
+    "trace_sha256": "8a9b43d8072430d51dee40f9596586336e794652bc0ffc534a123719021b263f",
+    "trace_scope_prefix": "TOP."
   }
 }

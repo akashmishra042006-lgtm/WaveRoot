@@ -4,7 +4,6 @@
 import mockFifo from "../../tests/fixtures/mock_fifo_failure.json";
 import mockFifoSource from "../../tests/fixtures/mock_fifo_wrap.sv?raw";
 import realFifoFail from "../fixtures/real_fifo_fail.json";
-import realFifoFixtureCausal from "../fixtures/real_fifo_fail_fixture_causal.json";
 import realFifoPass from "../fixtures/real_fifo_pass.json";
 import realAluX from "../fixtures/real_alu_x.json";
 import realTimeout from "../fixtures/real_fifo_timeout.json";
@@ -26,7 +25,6 @@ export const SAMPLES: readonly Sample[] = [
   { id: "real-fifo-pass", label: "FIFO correct, real Verilator run", group: "real", document: realFifoPass },
   { id: "real-alu-x", label: "ALU unknown value, real Icarus run", group: "real", document: realAluX },
   { id: "real-timeout", label: "FIFO run that timed out (real infrastructure error)", group: "real", document: realTimeout },
-  { id: "real-fifo-fixture", label: "FIFO mutant run + synthetic causal report", group: "real", document: realFifoFixtureCausal },
   { id: "state-inconclusive", label: "Inconclusive (synthetic)", group: "state", document: inconclusive },
   { id: "state-source", label: "Source unavailable (synthetic)", group: "state", document: sourceUnavailable },
   { id: "state-large", label: "Timestamps above 2^53 (synthetic)", group: "state", document: largeTime },
