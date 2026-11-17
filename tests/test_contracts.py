@@ -32,6 +32,7 @@ from src.contracts import (
     FailureKind,
     GoldenTrace,
     InvalidQueryError,
+    MAX_TIME_PS,
     LogicValue,
     MockFixture,
     MockSignal,
@@ -165,6 +166,22 @@ def test_timestamps_serialize_as_decimal_strings_and_stay_exact() -> None:
 def test_invalid_timestamps_are_rejected(bad: object) -> None:
     with pytest.raises(ValidationError):
         SignalSample.model_validate({"time_ps": bad, "value": {"width": 1, "bits": "1"}})
+
+
+def test_timestamps_are_bounded_by_max_time_ps() -> None:
+    assert MAX_TIME_PS == 2**128 - 1 and len(str(MAX_TIME_PS)) == 39
+    value = {"width": 1, "bits": "1"}
+    top = SignalSample.model_validate({"time_ps": str(MAX_TIME_PS), "value": value})
+    assert top.time_ps == MAX_TIME_PS
+    assert SignalSample.model_validate_json(top.model_dump_json()) == top
+    for bad in (MAX_TIME_PS + 1, str(MAX_TIME_PS + 1), "1" + "0" * 39, "9" * 5000):
+        with pytest.raises(ValidationError):
+            SignalSample.model_validate({"time_ps": bad, "value": value})
+    # Coverage stays strictly below the bound so [start, end + 1) is representable.
+    TraceCoverage(start_ps=0, end_ps=MAX_TIME_PS - 1)
+    TimeInterval(start_ps=0, end_ps=MAX_TIME_PS)
+    with pytest.raises(ValidationError):
+        TraceCoverage(start_ps=0, end_ps=MAX_TIME_PS)
 
 
 def test_unknown_fields_and_schema_versions_are_rejected(raw: dict[str, Any]) -> None:
@@ -533,6 +550,25 @@ def test_mock_trace_rejects_inconsistent_data() -> None:
         TraceCoverage(start_ps=10, end_ps=5)
     with pytest.raises(ValidationError):
         TimeInterval(start_ps=5, end_ps=5)
+
+
+def test_mock_trace_all_x_first_sample_only_at_start_or_resume() -> None:
+    coverage = TraceCoverage(start_ps=0, end_ps=100)
+    gap = (TimeInterval(start_ps=40, end_ps=60),)
+    # An all-x first sample is not a change, so it may only sit at the trace start ...
+    MockTrace(coverage=coverage, signals=(scalar("top.a", (0, "x"), (10, "1")),))
+    # ... or where dumping resumes.
+    MockTrace(coverage=coverage, unavailable=gap, signals=(scalar("top.a", (60, "x"), (70, "1")),))
+    with pytest.raises(ValidationError, match="all-x first sample"):
+        MockTrace(coverage=coverage, signals=(scalar("top.a", (20, "x"), (30, "1")),))
+    # A partly unknown first sample is a real change and stays legal anywhere.
+    vector = MockSignal(
+        decl=SignalDecl(path="top.v", width=2, bit_range=BitRange(left=1, right=0)),
+        samples=(SignalSample(time_ps=20, value=lv("x1")),),
+    )
+    MockTrace(coverage=coverage, signals=(vector,))
+    # A later all-x sample after a known value is a real change.
+    MockTrace(coverage=coverage, signals=(scalar("top.a", (0, "0"), (30, "x")),))
 
 
 # --------------------------------------------------------------------------
