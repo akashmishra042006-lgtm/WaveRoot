@@ -110,6 +110,14 @@ def convert_fst_to_vcd_text(
     return text
 
 
+def converter_version(*, timeout_s: float = 120.0, executable: str = DEFAULT_CONVERTER) -> str:
+    """The converter's ``--version`` output (stdout), stripped."""
+    timeout_s = _check_timeout(timeout_s)
+    resolved = _resolve(executable)
+    stdout = _run([resolved, "--version"], timeout_s, f"{executable} --version")
+    return stdout.decode("utf-8", errors="replace").strip()
+
+
 def trace_kind(path: Path) -> str:
     """``"vcd"`` or ``"fst"`` from the suffix (case-insensitive); otherwise unsupported."""
     suffix = path.suffix.lower()
