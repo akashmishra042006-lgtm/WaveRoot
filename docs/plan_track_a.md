@@ -188,8 +188,22 @@ to its exit code, and `run_comparison` on the mock FIFO trace.
 
 ## Notes for the contracts coordinator
 
-These came up while building the core. Neither blocks the tickets above; each
-would need a focused contract-change pull request.
+These came up while building the core. Both are now resolved by the contract
+change in PR #8 (`spec.md` section 15.1, decisions 8 to 11), and Track A
+implements the rulings:
+
+- **Reset and pending expectations (decision 10).** Cancelled is not waived:
+  in both modes, an epoch ended by reset with expectations outstanding is
+  `inconclusive`, and a comparison with nothing compared is `inconclusive`
+  (`NOTHING_COMPARED`).
+- **First record of all-x.** `MockTrace` now rejects an all-x first sample
+  except at the coverage start or where dumping resumes.
+- **Also decided:** timestamps are bounded by `MAX_TIME_PS` (decision 8), and an
+  x/z clock transition after reset makes the comparison `inconclusive`
+  (decision 9). Decision 11 (the VCD end-of-trace rule) was proposed pending a
+  check of real simulator output; Track A does not implement it yet.
+
+The original notes follow for the record.
 
 1. **Reset and pending expectations.** `spec.md` section 7 says a reset cancels
    an epoch's pending expectations; section 8.2 says a cycle-mode comparison is

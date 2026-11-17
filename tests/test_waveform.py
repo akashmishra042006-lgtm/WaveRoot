@@ -26,6 +26,7 @@ from src.contracts import (
     GoldenTrace,
     IndeterminateClockError,
     InvalidQueryError,
+    MAX_TIME_PS,
     LogicValue,
     MockFixture,
     MockTrace,
@@ -618,6 +619,32 @@ def test_fifo_fixture_passes_against_expectations_taken_from_the_trace(
     assert result.compared_values == 32
 
 
+@pytest.mark.parametrize("simulator", ["icarus", "verilator"])
+def test_real_simulator_dumps_reproduce_the_fixture_failure(simulator: str, fixture: MockFixture) -> None:
+    """VCDs written by Icarus Verilog 13.0 and Verilator 5.054 from
+    ``mock_fifo_wrap.sv`` (see ``tests/fixtures/waveform/mock_fifo_tb.sv``).
+
+    This checks the reader on real simulator output. It is not end-to-end
+    coverage: the simulators ran once to produce these files, not in this test.
+    """
+    path = FIXTURES / "waveform" / f"mock_fifo_{simulator}.vcd"
+    provider = VcdWaveformProvider.from_path(path)
+    assert provider.trace.skipped == ()
+    assert provider.get_coverage() == TraceCoverage(start_ps=0, end_ps=100000)
+    assert provider.get_clock_edges("tb.dut.clk", 0, 100001) == tuple(range(5000, 100000, 10000))
+    for signal in fixture.trace.signals:
+        path_ = signal.decl.path
+        assert provider.get_signal_decl(path_).width == signal.decl.width
+        # The simulated values match the hand-stepped fixture from cycle 0 on.
+        for time_ps in range(25000, 100001, 10000):
+            assert provider.get_value_at(path_, time_ps) == MockWaveformProvider(fixture.trace).get_value_at(
+                path_, time_ps
+            ), (simulator, path_, time_ps)
+    result = compare_files(path, FIXTURES / "mock_fifo_golden.jsonl")
+    assert without_detail(result) == without_detail(fixture.comparison)
+    assert_reproducible(provider, result)
+
+
 def test_compare_files_round_trip(fixture: MockFixture, tmp_path: Path) -> None:
     vcd_path = tmp_path / "sim.vcd"
     vcd_path.write_text(vcd_from_mock(fixture.trace), encoding="utf-8")
@@ -972,10 +999,15 @@ def test_handshake_reset_starts_a_new_epoch_and_cancels_pending_transactions() -
     result = compare(provider, golden(HANDSHAKE_HEADER, two_epochs))
     assert (result.status, result.compared_values, result.diagnostics) == (AnalysisStatus.PASS, 2, ())
 
+    # Spec 7 (decision 10): expectations cancelled by reset are not waived, so a
+    # word the design may have dropped before the reset can never pass.
     pending = transactions(1, 2) + transactions(7, epoch=1)
     cancelled = compare(provider, golden(HANDSHAKE_HEADER, pending))
-    assert cancelled.status is AnalysisStatus.PASS
-    assert codes_of(cancelled) == ["EXPECTATIONS_CANCELLED_BY_RESET"]
+    assert (cancelled.status, codes_of(cancelled)) == (
+        AnalysisStatus.INCONCLUSIVE,
+        ["EXPECTATIONS_CANCELLED_BY_RESET"],
+    )
+    assert cancelled.failure is None and cancelled.compared_values == 1
 
     # Reset does not rewind one global stream: epoch 1 is checked against epoch 1.
     rewound = compare(provider, golden(HANDSHAKE_HEADER, transactions(1) + transactions(1, epoch=1)))
@@ -1357,7 +1389,7 @@ def test_handshake_epoch_cancelled_without_any_transfer_is_not_a_pass() -> None:
     result = compare(provider, golden(HANDSHAKE_HEADER, transactions(1)))
     assert result.status is AnalysisStatus.INCONCLUSIVE
     assert result.compared_values == 0
-    assert codes_of(result) == ["EXPECTATIONS_CANCELLED_BY_RESET", "NOTHING_COMPARED"]
+    assert codes_of(result) == ["EXPECTATIONS_CANCELLED_BY_RESET"]
 
 
 @pytest.mark.parametrize(
@@ -1398,32 +1430,67 @@ def test_non_ascii_digits_are_invalid_not_a_crash(text: str) -> None:
         parse_vcd(text)
 
 
-def test_absurdly_long_timestamps_are_unsupported_not_a_crash(tmp_path: Path) -> None:
-    long_time = "9" * 5000
-    with pytest.raises(UnsupportedTraceError, match="digits"):
-        parse_vcd(HEADER + f"#0\n0!\n#{long_time}\n")
+def test_timestamps_beyond_max_time_ps_are_unsupported_not_a_crash(tmp_path: Path) -> None:
+    ps_header = HEADER.replace("1 ns", "1 ps")
+    fs_header = HEADER.replace("1 ns", "1 fs")
+    for text in [
+        HEADER + f"#0\n0!\n#{'9' * 5000}\n",  # never reaches int()
+        ps_header + f"#0\n0!\n#{MAX_TIME_PS}\n",  # coverage end must stay below the bound
+        ps_header + f"#0\n0!\n#{MAX_TIME_PS + 1}\n",
+        HEADER + f"#0\n0!\n#{MAX_TIME_PS // 1000 + 1}\n",  # in bound as ticks, not as ps
+    ]:
+        with pytest.raises(UnsupportedTraceError, match="MAX_TIME_PS"):
+            parse_vcd(text)
     vcd = tmp_path / "long.vcd"
-    vcd.write_text(HEADER + f"#0\n0!\n#{long_time}\n", encoding="utf-8")
+    vcd.write_text(HEADER + f"#0\n0!\n#{'9' * 5000}\n", encoding="utf-8")
     result = compare_files(vcd, FIXTURES / "mock_fifo_golden.jsonl")
     assert (result.status, codes_of(result)) == (AnalysisStatus.UNSUPPORTED, ["TRACE_UNSUPPORTED"])
-    # Long but representable timestamps stay exact.
-    big = "1" + "0" * 3000
-    provider = VcdWaveformProvider.from_text(HEADER + f"#0\n0!\n#{big}\n1!\n")
-    assert provider.get_coverage().end_ps == int(big) * 1000
+    # The largest legal values stay exact, including femtosecond ticks above 39 digits.
+    top = VcdWaveformProvider.from_text(ps_header + f"#0\n0!\n#{MAX_TIME_PS - 1}\n1!\n")
+    assert top.get_coverage().end_ps == MAX_TIME_PS - 1
+    fs_top = VcdWaveformProvider.from_text(fs_header + f"#0\n0!\n#{(MAX_TIME_PS - 1) * 1000}\n1!\n")
+    assert fs_top.get_coverage().end_ps == MAX_TIME_PS - 1
 
 
-def test_unknown_clock_transition_during_comparison_is_a_diagnostic() -> None:
+def test_unknown_clock_transition_after_reset_is_inconclusive() -> None:
+    """Spec 6.1 (decision 9): an x/z clock span may hide an edge and shift every
+    later cycle index, so the comparison stops at the next edge."""
     events = clocked({})
     events[25] = "xc"  # instead of rising at 25 ns, the clock goes unknown
     provider = crq(events)
     assert provider.get_clock_edges("top.clk", 0, 60001) == (5000, 15000, 35000, 45000, 55000)
-    result = compare(provider, golden(ONLY_Q, cycle_records({"q": "0001"}, {"q": "0001"})))
-    assert result.status is AnalysisStatus.PASS
-    assert codes_of(result) == ["CLOCK_UNKNOWN_TRANSITION"]
+    two = golden(ONLY_Q, cycle_records({"q": "0001"}, {"q": "0001"}))
+    result = compare(provider, two)
+    assert (result.status, codes_of(result)) == (AnalysisStatus.INCONCLUSIVE, ["CLOCK_UNKNOWN_TRANSITION"])
     assert "25000" in result.diagnostics[0].message
-    # An unknown clock before reset is first observed active is not reported.
+    assert result.compared_values == 1  # cycle 0 at 15 ns was compared before the x span
+
+    # A failure found before the x span is still a failure.
+    wrong = compare(provider, golden(ONLY_Q, cycle_records({"q": "0011"}, {"q": "0001"})))
+    assert wrong.status is AnalysisStatus.FAIL
+    assert wrong.failure is not None and wrong.failure.observation.time_ps == 15000
+    # A comparison that completes before the x span is unaffected.
+    assert compare(provider, golden(ONLY_Q, cycle_records({"q": "0001"}))).status is AnalysisStatus.PASS
+    # An x span during reset, after reset was first observed, still counts.
+    during_reset = clocked({})
+    during_reset[10] = "xc"  # reset releases on this falling edge; clock goes x instead
+    during_reset[12] = "0c 1r"
+    blocked = compare(crq(during_reset), golden(ONLY_Q, cycle_records({"q": "0001"})))
+    assert codes_of(blocked) == ["CLOCK_UNKNOWN_TRANSITION"]
+    # An unknown clock before reset is first observed active is ignored.
     early = clocked({})
     early[0] = "xc 0r b0001 q"
     early[2] = "0c"
     quiet = compare(crq(early), golden(ONLY_Q, cycle_records({"q": "0001"})))
     assert (quiet.status, quiet.diagnostics) == (AnalysisStatus.PASS, ())
+
+
+def test_handshake_pass_needs_a_known_clock_until_the_end() -> None:
+    """Ruling out extra transactions needs every later edge, so an x clock
+    after the last expected transfer still blocks the pass."""
+    text = build_vcd(STREAM, [{"valid": "1", "ready": "1", "data": byte(1)}, {"valid": "0"}], tail_cycles=2)
+    clean = VcdWaveformProvider.from_text(text)
+    assert compare(clean, golden(HANDSHAKE_HEADER, transactions(1))).status is AnalysisStatus.PASS
+    glitched = VcdWaveformProvider.from_text(text + "#72\nxc0\n#74\n0c0\n#80\n")
+    result = compare(glitched, golden(HANDSHAKE_HEADER, transactions(1)))
+    assert (result.status, codes_of(result)) == (AnalysisStatus.INCONCLUSIVE, ["CLOCK_UNKNOWN_TRANSITION"])

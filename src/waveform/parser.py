@@ -44,6 +44,7 @@ from src.contracts import (
     TimeInterval,
     TimeUnit,
     TraceCoverage,
+    MAX_TIME_PS,
     WaveformWindow,
     to_picoseconds,
 )
@@ -67,23 +68,28 @@ _TIMESCALE_RE: Final = re.compile(r"(1|10|100)(s|ms|us|ns|ps|fs)")
 _VECTOR_RE: Final = re.compile(r"[01xz]+")
 _SIZE_RE: Final = re.compile(r"0*[1-9][0-9]{0,8}")  # ASCII digits only, at least 1
 _DIGITS_RE: Final = re.compile(r"[0-9]+")  # ASCII only: str.isdigit() also accepts "²"
-# Python cannot convert decimal strings of more than 4300 digits to or from int
-# by default. Timestamps are capped well below that so every timestamp, scaled
-# to picoseconds, can still be printed and serialized (spec.md sections 4, 11).
-MAX_TIMESTAMP_DIGITS: Final = 4000
+# A tick count exceeds MAX_TIME_PS's 39 digits by at most the femtosecond
+# scale (3 digits). Longer tokens are rejected before int() is called.
+_MAX_TICK_DIGITS: Final = len(str(MAX_TIME_PS)) + 3
 
 
-def _timestamp(token: str) -> int:
-    """The integer after ``#``, in ASCII decimal."""
+def _timestamp(token: str, magnitude: int, unit: TimeUnit) -> int:
+    """The time after ``#`` in picoseconds, within the spec section 4 bound."""
     digits = token[1:]
     if _DIGITS_RE.fullmatch(digits) is None:
         raise InvalidTraceError(f"invalid timestamp {token[:40]!r}")
     significant = digits.lstrip("0")
-    if len(significant) > MAX_TIMESTAMP_DIGITS:
+    if len(significant) > _MAX_TICK_DIGITS:
         raise UnsupportedTraceError(
-            f"timestamp has {len(significant)} digits; at most {MAX_TIMESTAMP_DIGITS} are supported"
+            f"timestamp has {len(significant)} digits, beyond MAX_TIME_PS (spec section 4)"
         )
-    return int(significant or "0")
+    time_ps = to_picoseconds(int(significant or "0"), magnitude, unit)
+    # Coverage end must stay below MAX_TIME_PS, and any timestamp may be the last.
+    if time_ps >= MAX_TIME_PS:
+        raise UnsupportedTraceError(f"timestamp {time_ps} ps is not below MAX_TIME_PS (spec section 4)")
+    return time_ps
+
+
 _UNSUPPORTED_VAR_TYPES: Final = frozenset({"real", "realtime", "event", "string"})
 _BODY_BLOCKS: Final = frozenset({"$dumpvars", "$dumpall", "$dumpon", "$dumpoff"})
 
@@ -374,7 +380,7 @@ class _Parser:
             if lead == "#":
                 if open_block is not None:
                     raise InvalidTraceError(f"timestamp {token!r} inside an unterminated {open_block} block")
-                new_time = to_picoseconds(_timestamp(token), magnitude, unit)
+                new_time = _timestamp(token, magnitude, unit)
                 if time is None:
                     time = first_time = new_time
                 elif new_time < time:

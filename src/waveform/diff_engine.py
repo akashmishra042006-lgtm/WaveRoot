@@ -20,9 +20,10 @@ the corresponding statuses.
 
 from __future__ import annotations
 
+import bisect
 import json
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from src.contracts import (
@@ -68,13 +69,10 @@ class _Run:
     provider: WaveformProvider
     golden: GoldenTrace
     compared: int = 0
-    notes: list[Diagnostic] = field(default_factory=list)
-    # Clock transitions to or from x/z (spec 6.1: not edges, but diagnostics).
+    # Ascending times of clock transitions to or from x/z (spec 6.1: not edges).
     unknown_clock_times: tuple[int, ...] = ()
-    # The first edge at which reset was observed active, and the last edge the
-    # comparison reached (None once the whole scanned range was walked).
+    # The first edge at which reset was observed active.
     active_from: int | None = None
-    reached: int | None = None
 
     @property
     def mode(self) -> ComparisonMode:
@@ -88,7 +86,7 @@ class _Run:
         diagnostics: list[Diagnostic] | None = None,
     ) -> ComparisonResult:
         failures = failures or []
-        extra = [*self._clock_notes(), *(diagnostics or [])]
+        extra = list(diagnostics or [])
         if status is AnalysisStatus.PASS and self.compared == 0:
             # A pass needs at least one compared value (spec 8.4), for example
             # when reset cancelled every expectation before any transfer.
@@ -106,25 +104,23 @@ class _Run:
             failure=failures[0] if failures else None,
             additional_mismatches=tuple(failures[1:]),
             compared_values=self.compared,
-            diagnostics=tuple([*self.notes, *extra]),
+            diagnostics=tuple(extra),
         )
 
-    def _clock_notes(self) -> list[Diagnostic]:
+    def require_known_clock(self, before_ps: int | None) -> None:
+        """Spec 6.1: an x/z clock transition after reset is first observed active,
+        and before ``before_ps`` (or anywhere later, if None), may hide an edge."""
         if self.active_from is None:
-            return []
-        times = [
-            t for t in self.unknown_clock_times
-            if t > self.active_from and (self.reached is None or t <= self.reached)
-        ]
-        if not times:
-            return []
-        return [
-            Diagnostic(
-                code="CLOCK_UNKNOWN_TRANSITION",
-                message=f"clock {self.golden.header.clock} has {len(times)} transition(s) to or "
-                f"from x/z after reset was observed, first at {times[0]} ps; they are not edges",
+            return
+        times = self.unknown_clock_times
+        position = bisect.bisect_right(times, self.active_from)
+        if position < len(times) and (before_ps is None or times[position] < before_ps):
+            raise _Stop(
+                AnalysisStatus.INCONCLUSIVE,
+                "CLOCK_UNKNOWN_TRANSITION",
+                f"clock {self.golden.header.clock} goes to or from x/z at {times[position]} ps "
+                "after reset was observed; an edge may have been missed",
             )
-        ]
 
 
 def compare(provider: WaveformProvider, golden: GoldenTrace) -> ComparisonResult:
@@ -270,7 +266,7 @@ def _walk(run: _Run) -> ComparisonResult:
     final_done = False  # the final golden epoch needs nothing more
 
     for time_ps in edges:
-        run.reached = time_ps
+        run.require_known_clock(time_ps)
         reset_before = provider.get_value_at(header.reset, time_ps, phase=_BEFORE).bits
         if reset_before == active:
             if not seen_active:
@@ -314,7 +310,6 @@ def _walk(run: _Run) -> ComparisonResult:
             if epoch == final_epoch and cycle == len(records) - 1:
                 return run.result(AnalysisStatus.PASS)
 
-    run.reached = None
     return _finish(run, seen_active, epoch, final_epoch, final_done, cut)
 
 
@@ -334,12 +329,12 @@ def _close_epoch(
                 f"lists cycles up to {len(records) - 1}",
             )
     elif consumed < len(records):
-        run.notes.append(
-            Diagnostic(
-                code="EXPECTATIONS_CANCELLED_BY_RESET",
-                message=f"reset ended epoch {epoch} with {len(records) - consumed} "
-                "expected transaction(s) not yet transferred; they were cancelled",
-            )
+        # Spec 7: cancelled, never matched against a later epoch, but not waived.
+        raise _Stop(
+            AnalysisStatus.INCONCLUSIVE,
+            "EXPECTATIONS_CANCELLED_BY_RESET",
+            f"reset ended epoch {epoch} with {len(records) - consumed} expected "
+            "transaction(s) not yet transferred",
         )
 
 
@@ -366,6 +361,9 @@ def _finish(
                 f"every expected transaction matched, but {what} prevents ruling out "
                 "extra transactions afterwards",
             )
+        # Ruling out extra transactions needs every later edge, so an unknown
+        # clock anywhere after reset also blocks the pass.
+        run.require_known_clock(None)
         return run.result(AnalysisStatus.PASS)
     if cut is not None:
         raise _Stop(
