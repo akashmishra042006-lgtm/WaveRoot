@@ -117,7 +117,11 @@ generate or array instances, for example `tb.gen[2].u.q`.
 - Timestamps are trace times. Nothing is renormalized so that cycle 0 lands on a
   fixed time; `Observation` carries the cycle index and the real edge time
   together. Track C may record its own offsets in its run metadata.
-- Timestamps have no upper bound in Python. See section 11 for JSON encoding.
+- Timestamps are bounded: `0 <= t <= MAX_TIME_PS = 2**128 - 1`. Every legal
+  64-bit tick count at every legal timescale fits. `TraceCoverage.end_ps` is
+  strictly less than `MAX_TIME_PS`, so an exclusive interval end is always
+  representable. A trace with a timestamp above the bound is `unsupported`; a
+  contract model rejects it. See section 11 for JSON encoding.
 
 ## 5. Sampling phases
 
@@ -159,7 +163,14 @@ observation.
 
 - A rising edge at T: `before` is known `0` and `settled` is known `1`. A
   falling edge is the reverse.
-- A transition from or to `x`/`z` is not an edge. It is a diagnostic.
+- A transition from or to `x`/`z` is not an edge. After reset has first been
+  observed active, such a transition means an edge may have been missed: the
+  comparison stops as `inconclusive` with diagnostic `CLOCK_UNKNOWN_TRANSITION`
+  at the first rising edge after it, unless a failure was already found at an
+  earlier edge or the comparison had already completed. Before reset is first
+  observed active, such transitions are ignored. Consequently every observation
+  in a `ComparisonResult`, from the first reset-active edge to the failing or
+  final edge, lies on a clock with no unknown transitions.
 - A clock must be one bit wide.
 - Several transitions of the clock at one timestamp are ambiguous. A provider
   that retains same-timestamp history raises `IndeterminateClockError`.
@@ -205,9 +216,13 @@ Consequences:
 - Epoch 0 begins at the first rising edge whose pre-edge reset is known
   inactive, after reset was observed active. That edge is cycle 0. Cycles count
   rising edges from 0 within the epoch.
-- An edge whose pre-edge reset is active ends the current epoch immediately and
-  cancels its pending expectations. The next inactive edge starts the next epoch
-  at cycle 0.
+- An edge whose pre-edge reset is active ends the current epoch immediately.
+  Expectations of that epoch not yet observed are cancelled: they are never
+  matched against a later epoch. They are not waived: if any remain, the
+  comparison stops at that edge as `inconclusive` (`EPOCH_ENDED_EARLY` in cycle
+  mode, `EXPECTATIONS_CANCELLED_BY_RESET` in handshake mode). The golden model
+  must list, per epoch, only expectations it guarantees are observed before the
+  reset that ends it. The next inactive edge starts the next epoch at cycle 0.
 - An `x`/`z` reset at a sampling edge, or a reset change at the edge timestamp,
   makes the comparison `inconclusive`.
 - Handshake transactions are indexed from 0 within each epoch. A stall consumes
@@ -270,7 +285,9 @@ cycle of every epoch was observed inside trace coverage.
 Completion: when `deadline_cycle` is set and that cycle of the final epoch is
 observed with expectations outstanding, the result is `missing_transaction`
 anchored at that edge. If the trace ends before the deadline, or no deadline is
-set and expectations remain, the result is `inconclusive`.
+set and expectations remain, the result is `inconclusive`. A non-final epoch is
+complete only if all of its transactions transferred before the reset that
+ended it; otherwise section 7 applies.
 
 ### 8.4 Result
 
@@ -286,6 +303,8 @@ set and expectations remain, the result is `inconclusive`.
 | `error` | Tooling or infrastructure failed. | null |
 
 Every status other than `pass` and `fail` must carry at least one diagnostic.
+A comparison in which no value was compared is `inconclusive`
+(`NOTHING_COMPARED`).
 `compared_values` counts expected values checked, including those at a failing
 observation. Track C's CLI maps `pass` to exit 0, `fail` to 1, `invalid_input`
 and `error` to 2, and `unsupported` and `inconclusive` to 3.
@@ -318,6 +337,9 @@ A known expected value against an actual value with `x`/`z` is always a failure.
 | Signal has no record yet at the observed instant | all-`x` at the declared width. This includes `before` at the trace start. |
 | `before` at the time dumping resumes | `DataUnavailableError`; `settled` there is known. |
 | Malformed request | `InvalidQueryError`. |
+
+An explicit first record that is all-`x` is not a change and never appears as a
+window sample, except as the restatement where a dump gap ends.
 
 Errors are raised in this order: malformed request, missing signal, out of
 range, unavailable. No method returns a placeholder for a failed query.
@@ -366,6 +388,8 @@ range, unavailable. No method returns a placeholder for a failed query.
 - Timestamps serialize as canonical decimal strings (`"55000"`), so values above
   2^53 survive JavaScript. Input accepts an integer or a canonical decimal
   string. Floats, booleans, signs, leading zeros, and exponents are rejected.
+  A timestamp string is at most 39 digits and is checked for length before
+  conversion.
 - Counts, widths, indices, and line numbers are JSON integers. Floats and
   booleans are rejected.
 - Absent or inapplicable data is `null`. It is never a fabricated value.
@@ -440,6 +464,11 @@ literal X propagation.
   payloads cannot be hidden by alignment.
 - Several mismatches at one edge yield the deterministic anchor of section 10.
 - Lookups and slices agree with a linear-scan oracle under property tests.
+- A clock that becomes `x` mid-epoch makes the comparison `inconclusive`; a
+  failure found before it is still `fail`.
+- A reset that ends an epoch with expectations outstanding is `inconclusive` in
+  both modes, never `pass`.
+- A timestamp above `MAX_TIME_PS` is `unsupported`, never a crash.
 
 ### 14.3 Track B
 
@@ -504,6 +533,13 @@ change process in section 2 rather than working around it locally:
 5. `protocol_violation` is not a failure kind in schema 1.
 6. Sequential edges are defined per clock edge, with carry edges for held values.
 7. A design without an observed reset is unsupported in schema 1.
+8. Timestamps are bounded by `MAX_TIME_PS = 2**128 - 1`; JSON timestamp strings
+   are at most 39 digits.
+9. A clock transition to or from `x`/`z` after reset is first observed makes the
+   comparison `inconclusive`.
+10. Expectations cancelled by reset are not waived: an epoch ended with
+    expectations outstanding is `inconclusive` in both modes, and a comparison
+    with nothing compared is `inconclusive`.
 
 ## 16. Mock fixture
 
