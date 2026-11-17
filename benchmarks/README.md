@@ -31,7 +31,13 @@ Specification: `docs/track-c/benchmark-spec.md`; shared semantics: `spec.md`.
   marker comments.
 - Each run records provenance: tool version, argument-array commands, exit
   codes, input hashes, and the detected VCD scope prefix (Verilator wraps the
-  design in `TOP.`; Icarus does not — the mapping is recorded, never assumed).
+  design in `TOP.`; Icarus does not — the mapping is detected, never assumed).
+- Golden models emit canonical `tb.dut.*` paths. `benchlib.rebase_golden`
+  maps them onto each run's trace hierarchy before comparison (spec §3.1), so
+  every anchor resolves in its own trace (§5.1).
+- Cross-check: `TestTrackAAgreement` runs Track A's real VCD comparison and the
+  benchmark self-check on the same traces; verdicts, anchors, values, and
+  counts must be identical (only the prose `detail` may differ).
 - Schedules marked `mutant_detected: false` in a manifest are intentional
   masking controls: detection is schedule-dependent, and four directed cases
   are a smoke suite, not an accuracy estimate.

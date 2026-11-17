@@ -228,6 +228,19 @@ class TestProcessOutcomes:
         assert record.run_dir is not None
         assert processes_mentioning(str(record.run_dir)) == []
 
+    def test_timeout_kills_grandchildren(self, tmp_path: Path) -> None:
+        """The whole process group dies, including children of the step."""
+        runner = Runner(tmp_path / "a", Limits(wall_clock_s=1.0))
+        marker = "61.4321"
+        deadline = time.monotonic() + 1.0
+        step = runner._execute(
+            "probe", ("sh", "-c", f"sleep {marker} & sleep {marker}; wait"),
+            tmp_path, deadline, threading.Event(), None,
+        )
+        assert step.outcome is not None and step.outcome[0] is RunStatus.TIMEOUT
+        time.sleep(0.2)
+        assert processes_mentioning(f"sleep {marker}") == []
+
     def test_cancellation_kills_the_simulator(self, tmp_path: Path) -> None:
         runner = Runner(tmp_path / "a", Limits(wall_clock_s=60.0))
         req = make_case(tmp_path / "case", HANG_TB)

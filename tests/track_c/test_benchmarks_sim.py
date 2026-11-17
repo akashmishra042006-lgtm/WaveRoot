@@ -43,6 +43,11 @@ def _run(case: Case, variant: str, schedule: Schedule, tmp_path_factory, tag: st
         run_dir=run_dir,
     )
     cycle, hs = case.golden.goldens_for(case.stim(schedule.name))
+    # Golden models emit canonical tb.dut.* paths; map them onto this run's
+    # trace hierarchy (Verilator adds a TOP scope, Icarus does not).
+    prefix = result.provenance["trace_scope_prefix"]
+    cycle = benchlib.rebase_golden(cycle, prefix)
+    hs = benchlib.rebase_golden(hs, prefix) if hs is not None else None
     edges = benchlib.parse_observed(result.observed)
     return result, cycle, hs, edges
 
@@ -75,7 +80,8 @@ class TestMutantVerdicts:
         control must pass. A build or simulator error is neither: it raises,
         and is never counted as a found design bug."""
         _require_simulator(case)
-        _, cycle, _, edges = _run(case, "mutant", schedule, tmp_path_factory)
+        run, cycle, _, edges = _run(case, "mutant", schedule, tmp_path_factory)
+        prefix = run.provenance["trace_scope_prefix"]
         result = benchlib.check_cycle(cycle, edges)
         if not schedule.mutant_detected:
             assert result.status is AnalysisStatus.PASS, (
@@ -89,7 +95,7 @@ class TestMutantVerdicts:
         failure = result.failure
         assert failure is not None
         assert failure.kind.value == anchor.kind
-        assert failure.signal_path == anchor.signal_path
+        assert failure.signal_path == prefix + anchor.signal_path
         assert failure.observation.epoch == anchor.epoch
         assert failure.observation.cycle == anchor.cycle
         assert failure.observation.time_ps == anchor.time_ps
@@ -103,13 +109,14 @@ class TestFifoDirectedAnchorDetail:
     def test_additional_mismatches_follow_declaration_order(self, tmp_path_factory) -> None:
         case = CASES[0]
         _require_simulator(case)
-        _, cycle, hs, edges = _run(case, "mutant", case.schedules[0], tmp_path_factory)
+        run, cycle, hs, edges = _run(case, "mutant", case.schedules[0], tmp_path_factory)
+        p = run.provenance["trace_scope_prefix"]
         result = benchlib.check_cycle(cycle, edges)
         assert result.failure is not None
-        assert result.failure.signal_path == "tb.dut.full"
+        assert result.failure.signal_path == p + "tb.dut.full"
         assert [a.signal_path for a in result.additional_mismatches] == [
-            "tb.dut.empty",
-            "tb.dut.out_valid",
+            p + "tb.dut.empty",
+            p + "tb.dut.out_valid",
         ]
         # Handshake mode sees the same bug later, as the wrong first payload.
         assert hs is not None
@@ -199,3 +206,36 @@ class TestProcessFailuresAreNotDesignBugs:
         assert prov["build_exit"] == 0 and prov["run_exit"] == 0
         assert isinstance(prov["build_cmd"], list)  # argument arrays, not shell text
         assert all(len(h) == 64 for h in prov["inputs_sha256"].values())
+
+
+def _semantic(result):
+    """A ComparisonResult without its prose ``detail`` strings."""
+    data = result.model_dump()
+    for anchor in ([data["failure"]] if data["failure"] else []) + list(data["additional_mismatches"]):
+        anchor.pop("detail")
+    return data
+
+
+@pytest.mark.parametrize(("case", "schedule"), _case_schedule_params())
+class TestTrackAAgreement:
+    """Two independent checkers on the same real trace: Track A's engine reads
+    the VCD; the benchmark self-check reads the testbench's own samples. They
+    must reach identical verdicts, anchors, values, and counts, which also
+    proves every anchor resolves in the trace (spec 5.1)."""
+
+    def test_track_a_matches_self_check(self, case, schedule, tmp_path_factory) -> None:
+        _require_simulator(case)
+        from src.contracts import ComparisonMode
+        from src.waveform import compare_files
+
+        for variant in ("correct", "mutant"):
+            run, cycle, hs, edges = _run(case, variant, schedule, tmp_path_factory, tag=f"_a_{variant}")
+            for golden in [g for g in (cycle, hs) if g is not None]:
+                path = run.run_dir / f"golden_{golden.header.mode.value}.jsonl"
+                path.write_text(golden.to_jsonl())
+                track_a = compare_files(run.vcd, path)
+                check = (benchlib.check_cycle if golden.header.mode is ComparisonMode.CYCLE else benchlib.check_handshake)(golden, edges)
+                assert _semantic(track_a) == _semantic(check), (
+                    f"{variant}/{golden.header.mode.value}: Track A {track_a.model_dump_json()} "
+                    f"vs self-check {check.model_dump_json()}"
+                )

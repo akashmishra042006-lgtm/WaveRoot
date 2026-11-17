@@ -341,43 +341,7 @@ def run_simulation(
 # --------------------------------------------------------------------------
 
 
-def vcd_declared_paths(vcd: Path) -> set[str]:
-    """Signal paths declared in the VCD header, as dotted hierarchy names."""
-    paths: set[str] = set()
-    stack: list[str] = []
-    with vcd.open() as fh:
-        for line in fh:
-            tok = line.split()
-            if not tok:
-                continue
-            if tok[0] == "$scope" and len(tok) >= 3:
-                stack.append(tok[2])
-            elif tok[0] == "$upscope":
-                if stack:
-                    stack.pop()
-            elif tok[0] == "$var" and len(tok) >= 5:
-                name = tok[4]
-                paths.add(".".join([*stack, name]))
-            elif tok[0] == "$enddefinitions":
-                break
-    return paths
-
-
-def detect_trace_prefix(vcd: Path, canonical: str = "tb.dut.clk") -> str:
-    """The scope prefix the simulator prepended to the canonical hierarchy.
-
-    Verilator wraps the design in a ``TOP`` scope (prefix ``"TOP."``); Icarus
-    dumps ``tb.dut.*`` directly (prefix ``""``). The canonical ``tb.dut.*``
-    paths in manifests and golden headers map to trace paths by prepending the
-    returned prefix; the mapping is recorded per run, never assumed.
-    """
-    declared = vcd_declared_paths(vcd)
-    suffix = canonical
-    matches = sorted(p for p in declared if p == suffix or p.endswith("." + suffix))
-    if not matches:
-        raise ValueError(f"{vcd}: no declared path matches {canonical!r}")
-    path = matches[0]
-    return "" if path == suffix else path[: -len(suffix)]
+from src.app.tracepaths import detect_trace_prefix, rebase_golden, vcd_declared_paths  # noqa: E402
 
 
 def vcd_body_has_unknown(vcd: Path) -> bool:
