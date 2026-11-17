@@ -1,0 +1,31 @@
+# Python environments, tooling, and build products
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.hypothesis/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+*.egg-info/
+build/
+dist/
+
+# Frontend dependencies and generated output
+node_modules/
+ui/dist/
+
+# Local configuration
+.env
+.env.*
+!.env.example
+.claude/settings.local.json
+.DS_Store
+
+# Put generated simulation traces and reports here. Small committed VCD/FST
+# test fixtures remain trackable; do not globally ignore those extensions.
+artifacts/
+obj_dir/
+.waveroot-cache/
