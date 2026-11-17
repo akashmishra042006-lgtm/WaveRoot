@@ -108,12 +108,19 @@ boundary. Track C must pass both from the manifest.
 
 ### 1.3 What the slicer refuses to guess
 
-- A guard that reads a signal the trace cannot supply is unknown, even under
-  `===` or a two-state cast that would turn a fabricated `x` into a known
-  value. A recorded `x` is still evaluated.
+- A guard is opaque, and so unknown, when an operand reads a signal the trace
+  cannot supply or contains a construct whose value is not computed (an
+  unsupported call such as `$countones`). Either one evaluates to a fabricated
+  `x`, which `===` or a two-state cast would turn into a known value. A
+  recorded `x` is still evaluated.
 - A value read before the last blocking write to it in the same combinational
-  process is not the traced value. Such reads prune nothing, are not followed,
-  and set `truncated` (`INTERMEDIATE_VALUE`). B-06 is the real fix.
+  process is not the traced value. An `if` or `case` reads its condition
+  before every statement it controls, so a write inside its own branch counts.
+  Such reads prune nothing, are not followed, and set `truncated`
+  (`INTERMEDIATE_VALUE`). B-06 is the real fix.
+- A combinational process in which no assignment executes (an inferred latch,
+  or an undriven path) ends the slice with `truncated` and
+  `NO_ACTIVE_ASSIGNMENT`.
 - A process with an intra-assignment delay (`q <= #1 d`) is an unsupported
   driver; the slice stops there.
 - `max_cycles_back` bounds the hold scan as well as the slice.

@@ -384,15 +384,27 @@ def reads_unavailable(expr: Expr, lookup: Lookup) -> bool:
     return any(lookup(signal) is None for signal in signals_of(expr))
 
 
+def guard_is_opaque(guard: Guard, lookup: Lookup) -> bool:
+    """True when ``guard`` cannot be evaluated faithfully, so it must not prune.
+
+    That is the case when an operand contains a construct whose value is not
+    computed, or reads a signal ``lookup`` cannot supply. Either one evaluates
+    to a fabricated ``x``, and an operator such as ``===`` or a two-state cast
+    would turn that ``x`` into a known, possibly wrong, result.
+    """
+    return guard.kind is GuardKind.UNSUPPORTED or any(
+        not is_supported(operand) or reads_unavailable(operand, lookup)
+        for operand in guard_operands(guard)
+    )
+
+
 def evaluate_guard(guard: Guard, lookup: Lookup) -> Tri:
     """Whether ``guard`` selects its branch: true, false, or unknown.
 
-    A guard that reads an unavailable signal is unknown, whatever its operators
-    would make of an ``x``: the missing value is not a recorded ``x``.
+    An opaque guard (see ``guard_is_opaque``) is unknown, whatever its
+    operators would make of an ``x``.
     """
-    if guard.kind is GuardKind.UNSUPPORTED:
-        return Tri.UNKNOWN
-    if any(reads_unavailable(operand, lookup) for operand in guard_operands(guard)):
+    if guard_is_opaque(guard, lookup):
         return Tri.UNKNOWN
     if guard.kind is GuardKind.INDEX:
         index = evaluate(guard.predicate, lookup)

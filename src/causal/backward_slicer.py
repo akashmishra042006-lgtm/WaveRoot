@@ -853,11 +853,16 @@ class _Slicer:
                     reason,
                     unwritten,
                 )
-        elif not live:
-            self._diag(
+        elif not live and any(self._written(assign, signal)[0] & demand for assign in driver.assigns):
+            # The value was kept from an earlier evaluation (an inferred latch) or left
+            # undriven; neither is traced, so the slice ends here and says so (spec 12).
+            # A process whose writes all miss the demanded bits explains nothing here,
+            # and is not a latch of those bits.
+            self._stop(
+                node,
                 "NO_ACTIVE_ASSIGNMENT",
                 f"No assignment to {path} executes {when}; the process leaves it undriven or "
-                "infers storage, which is outside the MVP.",
+                "infers storage, which is outside the MVP, so its value is not traced.",
             )
         self._classify(node, driver, live, outcomes)
 
@@ -914,11 +919,11 @@ class _Slicer:
                 BranchStatus.UNKNOWN,
                 f"{guard.text} is not evaluated; every branch it guards is kept.",
             )
-        if any(ir.reads_unavailable(operand, lookup) for operand in ir.guard_operands(guard)):
+        if ir.guard_is_opaque(guard, lookup):
             return (
                 BranchStatus.UNKNOWN,
-                f"{label} `{guard.text}` reads a value that is not available {when}; every "
-                "branch it guards is kept.",
+                f"{label} `{guard.text}` reads a value that is not available or not computed "
+                f"{when}; every branch it guards is kept.",
             )
         value = ir.evaluate(guard.predicate, lookup)
         shown = ir.literal(value.bits)
