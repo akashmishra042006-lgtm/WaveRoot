@@ -696,5 +696,35 @@ def vcd_body_has_unknown(vcd: Path) -> bool:
     return False
 
 
+def rebase_golden(trace: GoldenTrace, prefix: str) -> GoldenTrace:
+    """Map a golden trace's canonical ``tb.dut.*`` paths onto a run's trace
+    hierarchy (spec.md section 3.1: Track C supplies this mapping).
+
+    Golden models stay simulator-independent and emit canonical paths; each
+    run detects its scope prefix (``detect_trace_prefix``) — ``"TOP."`` for
+    Verilator, ``""`` for Icarus — and the comparison uses the rebased paths,
+    so every failure anchor resolves in the trace it came from (section 5.1).
+    """
+    if not prefix:
+        return trace
+    if not prefix.endswith(".") or prefix.startswith("."):
+        raise ValueError(f"invalid scope prefix {prefix!r}")
+    h = trace.header
+    signals = tuple(s.model_copy(update={"path": prefix + s.path}) for s in h.signals)
+    header = h.model_copy(
+        update={
+            "clock": prefix + h.clock,
+            "reset": prefix + h.reset,
+            "signals": signals,
+            "valid": prefix + h.valid if h.valid else None,
+            "ready": prefix + h.ready if h.ready else None,
+        }
+    )
+    # Round-trip through the canonical parser so the result is fully validated.
+    from src.contracts import parse_golden_jsonl
+
+    return parse_golden_jsonl(GoldenTrace(header=header, records=trace.records).to_jsonl())
+
+
 def write_jsonl(trace: GoldenTrace, path: Path) -> None:
     path.write_text(trace.to_jsonl())
