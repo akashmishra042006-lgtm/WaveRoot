@@ -1,0 +1,94 @@
+{
+  "schema_version": "track-c-proposal-0.1",
+  "provenance": {
+    "kind": "synthetic_fixture",
+    "case_id": "case_04_alu_xprop",
+    "note": "Hand-authored UI contract example. Not simulator output or localization evidence."
+  },
+  "status": "fail",
+  "failure": {
+    "kind": "unknown_value",
+    "signal_id": "tb.dut.out_data",
+    "observation": {
+      "epoch": 0,
+      "cycle": 0,
+      "phase": "post_settle",
+      "time_tick": "5001"
+    },
+    "expected": {
+      "width": 8,
+      "bits": "00000000"
+    },
+    "actual": {
+      "width": 8,
+      "bits": "xxxxxxxx"
+    },
+    "explanation": "Illustrative four-state ternary result with unknown selector and differing operands."
+  },
+  "nodes": [
+    {
+      "id": "output-x",
+      "signal_id": "tb.dut.out_data",
+      "observation": {
+        "epoch": 0,
+        "cycle": 0,
+        "phase": "post_settle",
+        "time_tick": "5001"
+      },
+      "value": {
+        "width": 8,
+        "bits": "xxxxxxxx"
+      },
+      "location": null
+    }
+  ],
+  "edges": [],
+  "suspects": [],
+  "waveform": {
+    "tick_unit": "ps",
+    "start_tick": "0",
+    "end_tick": "100000",
+    "signals": [
+      {
+        "id": "tb.dut.out_data",
+        "width": 8,
+        "availability": "available",
+        "initial": {
+          "width": 8,
+          "bits": "00000000"
+        },
+        "transitions": [
+          {
+            "time_tick": "5001",
+            "value": {
+              "width": 8,
+              "bits": "xxxxxxxx"
+            }
+          },
+          {
+            "time_tick": "15001",
+            "value": {
+              "width": 8,
+              "bits": "01011010"
+            }
+          },
+          {
+            "time_tick": "35001",
+            "value": {
+              "width": 8,
+              "bits": "00110100"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "sources": [],
+  "assertions": [],
+  "diagnostics": [
+    {
+      "code": "SOURCE_UNAVAILABLE",
+      "message": "Source omitted intentionally to exercise the unavailable-source state."
+    }
+  ]
+}

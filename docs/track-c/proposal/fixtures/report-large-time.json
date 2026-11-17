@@ -1,0 +1,194 @@
+{
+  "schema_version": "track-c-proposal-0.1",
+  "provenance": {
+    "kind": "synthetic_fixture",
+    "case_id": "large_timestamp_ui",
+    "note": "Hand-authored UI contract example. Not simulator output or localization evidence. Arbitrary time offset tests exact serialization; this is not a separate physical benchmark."
+  },
+  "status": "fail",
+  "failure": {
+    "kind": "value_mismatch",
+    "signal_id": "tb.dut.full",
+    "observation": {
+      "epoch": 0,
+      "cycle": 3,
+      "phase": "post_settle",
+      "time_tick": "9007199254775994"
+    },
+    "expected": {
+      "width": 1,
+      "bits": "1"
+    },
+    "actual": {
+      "width": 1,
+      "bits": "0"
+    },
+    "explanation": "Fourth accepted write fills the depth-4 reference queue; mutant full remains low."
+  },
+  "nodes": [
+    {
+      "id": "wptr-pre",
+      "signal_id": "tb.dut.wptr",
+      "observation": {
+        "epoch": 0,
+        "cycle": 3,
+        "phase": "pre_edge",
+        "time_tick": "9007199254775992"
+      },
+      "value": {
+        "width": 3,
+        "bits": "011"
+      },
+      "location": {
+        "source_id": "fifo-source",
+        "line": 5,
+        "end_line": 5
+      }
+    },
+    {
+      "id": "wptr-post",
+      "signal_id": "tb.dut.wptr",
+      "observation": {
+        "epoch": 0,
+        "cycle": 3,
+        "phase": "post_settle",
+        "time_tick": "9007199254775994"
+      },
+      "value": {
+        "width": 3,
+        "bits": "000"
+      },
+      "location": {
+        "source_id": "fifo-source",
+        "line": 6,
+        "end_line": 6
+      }
+    },
+    {
+      "id": "full-post",
+      "signal_id": "tb.dut.full",
+      "observation": {
+        "epoch": 0,
+        "cycle": 3,
+        "phase": "post_settle",
+        "time_tick": "9007199254775994"
+      },
+      "value": {
+        "width": 1,
+        "bits": "0"
+      },
+      "location": {
+        "source_id": "fifo-source",
+        "line": 10,
+        "end_line": 10
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "wrap-update",
+      "source": "wptr-pre",
+      "target": "wptr-post",
+      "kind": "sequential",
+      "branch": "retained",
+      "reason": "Register update consumes the pre-edge pointer at this clock edge."
+    },
+    {
+      "id": "full-evaluate",
+      "source": "wptr-post",
+      "target": "full-post",
+      "kind": "combinational",
+      "branch": "retained",
+      "reason": "Settled full depends on the updated pointer. Other fan-in is omitted from this small mock."
+    }
+  ],
+  "suspects": [
+    {
+      "id": "suspect-wrap",
+      "rank": 1,
+      "node_id": "wptr-post",
+      "reason": "Illustrative hypothesis: wrap bit was preserved at the address boundary.",
+      "evidence_node_ids": [
+        "wptr-pre",
+        "wptr-post",
+        "full-post"
+      ],
+      "location": {
+        "source_id": "fifo-source",
+        "line": 6,
+        "end_line": 6
+      }
+    }
+  ],
+  "waveform": {
+    "tick_unit": "ps",
+    "start_tick": "9007199254740993",
+    "end_tick": "9007199254840993",
+    "signals": [
+      {
+        "id": "tb.dut.wptr",
+        "width": 3,
+        "availability": "available",
+        "initial": {
+          "width": 3,
+          "bits": "000"
+        },
+        "transitions": [
+          {
+            "time_tick": "9007199254745994",
+            "value": {
+              "width": 3,
+              "bits": "001"
+            }
+          },
+          {
+            "time_tick": "9007199254755994",
+            "value": {
+              "width": 3,
+              "bits": "010"
+            }
+          },
+          {
+            "time_tick": "9007199254765994",
+            "value": {
+              "width": 3,
+              "bits": "011"
+            }
+          },
+          {
+            "time_tick": "9007199254775994",
+            "value": {
+              "width": 3,
+              "bits": "000"
+            }
+          }
+        ]
+      },
+      {
+        "id": "tb.dut.full",
+        "width": 1,
+        "availability": "available",
+        "initial": {
+          "width": 1,
+          "bits": "0"
+        },
+        "transitions": []
+      }
+    ]
+  },
+  "sources": [
+    {
+      "id": "fifo-source",
+      "path": "fixture/fifo_excerpt.sv",
+      "content": "// Synthetic UI source excerpt; not a compiled benchmark.\nalways_ff @(posedge clk) begin\n  if (!rst_n) wptr <= 3'b000;\n  else if (push) begin\n    if (wptr[1:0] == 2'b11)\n      wptr <= {wptr[2], 2'b00};\n    else wptr <= wptr + 1'b1;\n  end\nend\nassign full = (wptr[1:0] == rptr[1:0]) && (wptr[2] != rptr[2]);\n",
+      "sha256": "3826970d534a830dd024d93c6bcb7a8dde543bbad1a1c32832e85e3b2ee92814"
+    }
+  ],
+  "assertions": [],
+  "diagnostics": [
+    {
+      "code": "SYNTHETIC_PARTIAL_GRAPH",
+      "message": "Graph deliberately omits additional fan-in; use for UI development only."
+    }
+  ]
+}
