@@ -1,6 +1,8 @@
-import { memo, useMemo, useRef, useState, type Dispatch, type PointerEvent, type WheelEvent } from "react";
+import { ReactFlow, Background, Controls, MarkerType, Position } from "@xyflow/react";
+import "@xyflow/react/dist/style.css";
+import { memo, useMemo, type Dispatch } from "react";
 import type { CausalEdge, CausalNode, Loaded } from "../model/types";
-import { describeValue, hasUnknown, shortName, type Radix } from "../model/values";
+import { describeValue, shortName, type Radix } from "../model/values";
 import type { Action, Selection } from "../state/selection";
 import { Panel } from "./common";
 import { Limits } from "./Evidence";
@@ -8,10 +10,8 @@ import { Limits } from "./Evidence";
 /** Above this many nodes the diagram is not drawn; the list is windowed. */
 export const GRAPH_DRAW_LIMIT = 400;
 const LIST_LIMIT = 500;
-const COL_W = 190;
-const ROW_H = 58;
-const NODE_W = 150;
-const NODE_H = 40;
+const COL_W = 235;
+const ROW_H = 86;
 
 interface Placed {
   node: CausalNode;
@@ -42,13 +42,6 @@ function layout(nodes: CausalNode[]): { placed: Map<string, Placed>; width: numb
     column.forEach((node, ri) => placed.set(node.id, { node, x: 20 + ci * COL_W, y: 30 + ri * ROW_H }));
   });
   return { placed, width: 40 + ordered.length * COL_W, height: 50 + tallest * ROW_H };
-}
-
-function edgeLabel(e: CausalEdge, nodes: Map<string, Placed>): string {
-  const s = nodes.get(e.source)?.node;
-  const t = nodes.get(e.target)?.node;
-  const branch = e.branch === "unknown" ? "unknown control (both branches kept)" : e.branch;
-  return `${s ? shortName(s.signal_path) : e.source} → ${t ? shortName(t.signal_path) : e.target}: ${e.edge_type}, ${e.role}, ${branch}. ${e.reason}`;
 }
 
 export function Graph({ doc, sel, dispatch }: { doc: Loaded; sel: Selection; dispatch: Dispatch<Action> }) {
@@ -120,107 +113,68 @@ function Diagram({
   anchorId: string | null;
   suspectRank: Map<string, number>;
 }) {
-  const [view, setView] = useState({ scale: 1, x: 0, y: 0 });
-  const drag = useRef<{ x: number; y: number; vx: number; vy: number } | null>(null);
-  const { placed, width, height } = geometry;
-  const zoom = (factor: number) => setView((v) => ({ ...v, scale: Math.min(4, Math.max(0.25, v.scale * factor)) }));
-  const onWheel = (e: WheelEvent) => {
-    if (!e.ctrlKey && !e.metaKey) return; // plain wheel scrolls the page
-    e.preventDefault();
-    zoom(e.deltaY < 0 ? 1.15 : 1 / 1.15);
-  };
-  const onDown = (e: PointerEvent) => {
-    if ((e.target as Element).closest("[data-node]")) return;
-    drag.current = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y };
-  };
-  const onMove = (e: PointerEvent) => {
-    const d = drag.current;
-    if (d) setView((v) => ({ ...v, x: d.vx + (e.clientX - d.x) / v.scale, y: d.vy + (e.clientY - d.y) / v.scale }));
-  };
-  const vbW = width / view.scale;
-  const vbH = height / view.scale;
-  return (
-    <div className="diagram">
-      <div className="diagram-tools" role="group" aria-label="Graph zoom">
-        <button type="button" onClick={() => zoom(1.25)} aria-label="Zoom graph in">+</button>
-        <button type="button" onClick={() => zoom(0.8)} aria-label="Zoom graph out">−</button>
-        <button type="button" onClick={() => setView({ scale: 1, x: 0, y: 0 })}>Reset view</button>
-        <span className="hint">Drag to pan · Ctrl+wheel to zoom</span>
-      </div>
-      <svg
-        role="img"
-        aria-label="Time-unrolled dependency graph; the node list below is the keyboard-accessible equivalent"
-        viewBox={`${-view.x} ${-view.y} ${vbW} ${vbH}`}
-        width="100%"
-        height={Math.min(height, 420)}
-        preserveAspectRatio="xMinYMin meet"
-        onWheel={onWheel}
-        onPointerDown={onDown}
-        onPointerMove={onMove}
-        onPointerUp={() => (drag.current = null)}
-        onPointerLeave={() => (drag.current = null)}
-      >
-        <defs>
-          <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" className="arrowhead" />
-          </marker>
-          <pattern id="unknown-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-            <line x1="0" y1="0" x2="0" y2="6" className="hatch" />
-          </pattern>
-        </defs>
-        {edges.map((e) => {
-          const s = placed.get(e.source);
-          const t = placed.get(e.target);
-          if (!s || !t) return null;
-          const x1 = s.x + NODE_W;
-          const y1 = s.y + NODE_H / 2;
-          const x2 = t.x;
-          const y2 = t.y + NODE_H / 2;
-          const sameCol = s.x === t.x;
-          const d = sameCol
-            ? `M ${s.x + NODE_W} ${y1} C ${s.x + NODE_W + 40} ${y1}, ${t.x + NODE_W + 40} ${y2}, ${t.x + NODE_W} ${y2}`
-            : `M ${x1} ${y1} C ${x1 + 40} ${y1}, ${x2 - 40} ${y2}, ${x2} ${y2}`;
-          return (
-            <path
-              key={e.id}
-              d={d}
-              className={`edge ${e.edge_type} branch-${e.branch} role-${e.role}`}
-              markerEnd="url(#arrow)"
-              data-edge={e.id}
-            >
-              <title>{edgeLabel(e, placed)}</title>
-            </path>
-          );
-        })}
-        {[...placed.values()].map(({ node, x, y }) => {
-          const selected = sel.selectedNodeId === node.id;
-          const rank = suspectRank.get(node.id);
-          const unknown = hasUnknown(node.value);
-          return (
-            <g
-              key={node.id}
-              data-node={node.id}
-              transform={`translate(${x} ${y})`}
-              className={`node${selected ? " selected" : ""}${node.id === anchorId ? " anchor" : ""}`}
-              onClick={() => dispatch({ type: "selectNode", id: node.id })}
-            >
-              <title>{`${node.signal_path}, cycle ${node.observation.cycle} ${node.observation.phase}: ${describeValue(node.value, "bin")}`}</title>
-              <rect width={NODE_W} height={NODE_H} rx="5" />
-              {unknown && <rect width={NODE_W} height={NODE_H} rx="5" fill="url(#unknown-hatch)" className="unknown-fill" />}
-              <text x="8" y="16" className="node-name">
-                {shortName(node.signal_path)}
-                {node.id === anchorId ? " ⚑" : ""}
-                {rank ? ` #${rank}` : ""}
-              </text>
-              <text x="8" y="32" className="node-sub">
-                c{node.observation.cycle} {node.observation.phase} · {node.value ? node.value.bits : "n/o"}
-              </text>
-            </g>
-          );
-        })}
-      </svg>
-    </div>
-  );
+  const active = new Set<string>();
+  if (sel.selectedNodeId) {
+    active.add(sel.selectedNodeId);
+    // Follow retained upstream evidence; a pruned arm is never an active path.
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const edge of edges) if (edge.branch === "retained" && active.has(edge.target) && !active.has(edge.source)) {
+        active.add(edge.source); changed = true;
+      }
+    }
+  }
+  // Retained downstream propagation is highlighted only if it reaches the
+  // immutable failure anchor, rather than every fan-out of the selection.
+  const toAnchor = new Set<string>(anchorId ? [anchorId] : []);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const e of edges) if (e.branch === "retained" && toAnchor.has(e.target) && !toAnchor.has(e.source)) {
+      toAnchor.add(e.source); changed = true;
+    }
+  }
+  const downstream = new Set<string>(sel.selectedNodeId ? [sel.selectedNodeId] : []);
+  changed = true;
+  while (changed) {
+    changed = false;
+    for (const e of edges) if (e.branch === "retained" && downstream.has(e.source) && toAnchor.has(e.target) && !downstream.has(e.target)) {
+      downstream.add(e.target); active.add(e.target); changed = true;
+    }
+  }
+  const nodes = [...geometry.placed.values()].map(({node, x, y}) => ({
+    id: node.id, position: {x, y}, sourcePosition: Position.Right, targetPosition: Position.Left,
+    selected: node.id === sel.selectedNodeId,
+    className: `signal-node ${node.id === anchorId ? "failure-node" : ""} ${active.has(node.id) ? "active-node" : "muted-node"}`,
+    data: {label: <div><div className="flex items-center justify-between gap-2"><strong>{shortName(node.signal_path)}</strong><span>{node.id === anchorId ? "FAIL" : suspectRank.has(node.id) ? `#${suspectRank.get(node.id)}` : ""}</span></div><div className="node-detail">C{node.observation.cycle} · {node.observation.phase} · {node.value?.bits ?? "n/o"}</div></div>},
+    ariaLabel: `${node.signal_path}, cycle ${node.observation.cycle} ${node.observation.phase}`,
+  }));
+  const flowEdges = edges.map(e => {
+    const sequential = e.edge_type === "sequential";
+    const retained = e.branch === "retained";
+    const color = e.branch === "unknown" ? "#d5a0ff" : sequential ? "#f5ba63" : "#52d7ed";
+    const source = geometry.placed.get(e.source)?.node;
+    const target = geometry.placed.get(e.target)?.node;
+    const delta = source && target ? target.observation.cycle - source.observation.cycle : 0;
+    // Schema-1 sequential edges cross before → settled at the SAME edge.
+    // Never falsely label these as a previous cycle.
+    const label = e.branch === "unknown" ? "unknown control" : sequential ? (delta ? `−${delta} cycle` : "clock edge") : delta ? `−${delta} cycle · carry` : undefined;
+    return {id:e.id, source:e.source, target:e.target, type:"smoothstep", label,
+      className: `branch-${e.branch}`,
+      style:{stroke:color, strokeWidth:active.has(e.source) && active.has(e.target) && retained ? 2.5 : 1.4, strokeDasharray:sequential ? "7 5" : undefined, opacity:e.branch === "pruned" ? 0.18 : 1},
+      labelStyle:{fill:color,fontSize:10}, labelBgStyle:{fill:"#101a28",fillOpacity:0.95},
+      markerEnd:{type:MarkerType.ArrowClosed,color},
+      ariaLabel:`${e.edge_type}, ${e.branch}. ${e.reason}`,
+    };
+  });
+  return <div className="diagram" style={{height:390}} data-testid="flow-graph">
+    <ReactFlow nodes={nodes} edges={flowEdges} onNodeClick={(_,node)=>dispatch({type:"selectNode",id:node.id})}
+      nodesDraggable={false} nodesConnectable={false} fitView fitViewOptions={{padding:0.18}}
+      minZoom={0.2} maxZoom={2.5} preventScrolling={false}>
+      <Background color="#26384a" gap={20}/><Controls showInteractive={false}/>
+    </ReactFlow>
+  </div>;
 }
 
 function NodeList({
@@ -240,7 +194,7 @@ function NodeList({
     return { incoming, byId: new Map(nodes.map((n) => [n.id, n])) };
   }, [nodes, edges]);
   return (
-    <details className="node-list" open={nodes.length <= 12}>
+    <details className="node-list">
       <summary>Node list ({nodes.length}{nodes.length > LIST_LIMIT ? `, showing ${LIST_LIMIT}` : ""})</summary>
       <ul>
         {shown.map((n) => (
@@ -287,7 +241,7 @@ const NodeRow = memo(function NodeRow({
       {inputs && inputs.length > 0 && (
         <ul className="inputs">
           {inputs.map((e) => (
-            <li key={e.id}>
+            <li key={e.id} data-edge={e.id} title={`${e.branch}: ${e.reason}`}>
               depends on <code>{byId.get(e.source)?.signal_path ?? e.source}</code> ({byId.get(e.source)?.observation.phase}) — {e.edge_type},{" "}
               {e.role}, {e.branch === "unknown" ? "unknown control" : e.branch}
             </li>

@@ -16,6 +16,7 @@ from __future__ import annotations
 import functools
 import http.server
 import json
+import os
 import platform
 import statistics
 import sys
@@ -32,7 +33,7 @@ WIDTHS = [1440, 1024, 768, 375]
 OVERLAP_JS = """
 () => {
   const els = [...document.querySelectorAll('button, select, h1, h2, .badge, dt, dd, [role=tab]')]
-    .filter(e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && e.offsetParent !== null; });
+    .filter(e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && e.offsetParent !== null && e.checkVisibility(); });
   const bad = [];
   for (let i = 0; i < els.length; i++) for (let j = i + 1; j < els.length; j++) {
     const a = els[i], b = els[j];
@@ -90,7 +91,7 @@ def main(out: Path) -> int:
     results: dict[str, object] = {"layout": {}, "machine": {}}
     failed = False
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(channel="chrome", headless=True)
+        browser = pw.chromium.launch(channel=os.environ.get("WAVEROOT_BROWSER_CHANNEL", "chromium"), headless=True)
         results["machine"] = {
             "browser": browser.version,
             "platform": platform.platform(),
@@ -104,6 +105,13 @@ def main(out: Path) -> int:
             page.get_by_test_id("sample-select").select_option("mock-fifo")
             if width <= 700:
                 page.get_by_role("tab", name="Suspects").click()
+            if width > 700:
+                # Exercise the actual React Flow node, not its list equivalent.
+                page.locator('.react-flow__node[data-id="wptr.c2.settled"]').click()
+                assert page.get_by_test_id("cursor-time").inner_text() == "45000 ps"
+                assert "35-40" in page.get_by_test_id("source-location").inner_text()
+                assert "selected" in page.locator('canvas[data-signal="tb.dut.wptr"]').get_attribute("class")
+                assert page.get_by_test_id("failure-marker-time").inner_text() == "55000 ps"
             page.get_by_test_id("suspect-s1").click()
             page.wait_for_timeout(150)
             page.screenshot(path=str(out / f"fifo-{width}.png"), full_page=True)

@@ -37,7 +37,7 @@ export function Value({ value, radix, testId }: { value: LogicValue | null; radi
   return (
     <span className={`value${unknown ? " unknown" : ""}`} data-testid={testId} title={describeValue(value, radix)}>
       <code className="bits">{value.bits}</code>
-      {view !== null && <span className="radix-view"> = {view}</span>}
+      {view !== null && <span className="radix-view"> = {radix === "hex" ? "0x" : ""}{view}</span>}
       {radix !== "bin" && view === null && <span className="radix-view"> ({radix}: n/a)</span>}
       {unknown && <span className="unknown-tag">Unknown bits</span>}
     </span>

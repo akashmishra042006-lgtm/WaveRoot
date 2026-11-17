@@ -147,3 +147,23 @@ describe("selection rules", () => {
     expect(sel.selectedSignalId).toBe("tb.dut.full");
   });
 });
+
+describe("ten-cycle viewport from observed clock edges", () => {
+  it("uses exact recorded edges with irregular periods above 2^53", async () => {
+    const { tenCycleWindow } = await import("../model/waveform");
+    const base = 1n << 60n;
+    const rising = Array.from({length:15},(_,i)=>base+BigInt(i*i+10*i+10));
+    const wave = {start_ps:base,end_ps:base+1000n,unavailable:[],signals:[{signal_path:"tb.clk",width:1,initial:{width:1,bits:"0"},samples:rising.flatMap(t=>[{time_ps:t,value:{width:1,bits:"1"}},{time_ps:t+1n,value:{width:1,bits:"0"}}])}]};
+    expect(tenCycleWindow(wave,"tb.clk",rising[7]!)).toEqual({start:rising[2],end:rising[12]});
+    expect(tenCycleWindow(wave,"tb.clk",rising[14]!)).toEqual({start:base,end:base+1000n});
+    expect(tenCycleWindow({...wave,unavailable:[{start_ps:rising[5]!+2n,end_ps:rising[6]!-1n}]},"tb.clk",rising[7]!)).toEqual({start:base,end:base+1000n});
+    expect(tenCycleWindow(wave,"missing",rising[7]!)).toEqual({start:base,end:base+1000n});
+  });
+});
+
+it("leaves a visible gap rather than holding a known value across dumpoff", async () => {
+  const { segments } = await import("../model/waveform");
+  const signal = {signal_path:"tb.a",width:1,initial:{width:1,bits:"1"},samples:[{time_ps:8n,value:{width:1,bits:"1"}}]};
+  const wave = {start_ps:0n,end_ps:10n,signals:[signal],unavailable:[{start_ps:3n,end_ps:8n}]};
+  expect(segments(wave,signal,{start:0n,end:10n},0n).map(s=>[s.start,s.end,s.value?.bits??null])).toEqual([[0n,3n,"1"],[3n,8n,null],[8n,10n,"1"]]);
+});

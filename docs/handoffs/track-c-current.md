@@ -1,3 +1,39 @@
+# November 17, 2026 — dark dashboard refresh
+
+Branch `feat/track-c-ui` fast-forwarded onto merged main `96e2593` before this
+refresh. React 19 + TypeScript, Tailwind CSS, React Flow, and high-DPI Canvas
+replace the earlier React 18/SVG presentation. Shared schema/fixtures unchanged.
+
+The failure hero shows exact Tfail, raw binary and hex; ranked suspects explicitly
+state confidence is not supplied. Copyable report-level assertions retain their
+validation labels. Graphs distinguish cyan combinational / amber dashed sequential
+edges, actual previous-cycle carries, retained active paths, unknown controls, and
+dimmed pruned branches. A shared selection synchronizes nodes, waveform rows,
+exact before/settled cursor values, and revision-checked, highlighted SV source.
+A bounded ps ruler and observed-clock ten-cycle fit avoid assumed clock periods;
+short/gapped traces retain available coverage. Dump gaps are not drawn as held
+values. The fixture remains explicitly synthetic, with no invented assertions.
+
+Validation in this cloud workspace:
+- Frontend: 54 tests pass; strict typecheck + production build pass.
+- Browser: Chromium 151, 1440/1024/768/375 px, no page overflow/visible control
+  overlaps/page errors. Actual React Flow node clicks synchronize waveform/source.
+  Screenshots inspected. On Intel Xeon Platinum 8573C, 100 signals × 1,000
+  transitions + 1,000 nodes: selection median 17.2 ms, max 143.2 ms; cursor median
+  17.0 ms. The occasional selection maximum exceeds the 100 ms target. Initial
+  load ~3.5 s. Graph drawing still capped at 400 nodes (accessible list above it).
+- `uv sync --locked`; `uv run mypy src/`: 17 files clean.
+- `uv run pytest -m "not integration" -q`: 421 passed, 69 deselected.
+- `uv run pytest tests/track_c/test_ui_fixtures.py -q`: 13 passed.
+- Full simulator gate could not pass locally: Verilator/Icarus are absent
+  (421 passed, 12 skipped, 54 failed, 3 errors). CI must run those real tool gates;
+  this is not full A → B → C integration coverage.
+
+Next: verify CI simulator gates, then continue C04 integration. Previous handoff
+below is historical; its statement that Track C PRs are unmerged is superseded.
+
+---
+
 # Track C handoff — current state
 
 Date: November 16, 2026. Latest work: ticket C05 (interface), done in the

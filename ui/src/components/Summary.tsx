@@ -42,7 +42,7 @@ export function FailureStrip({ doc, radix, dispatch }: { doc: Loaded; radix: Rad
   return (
     <section className="failure-strip" aria-label="First failure" data-testid="failure-strip">
       <div className="failure-head">
-        <h2>First failure</h2>
+        <h2>First failure <span className="hero-eyebrow">/ FAILURE ANCHOR</span></h2>
         <span className={`badge kind-${failure.kind}`} data-testid="failure-kind">{KIND_LABELS[failure.kind]}</span>
         <button type="button" className="primary" onClick={() => dispatch({ type: "jumpToFailure" })}>
           Jump to first failure
@@ -52,12 +52,12 @@ export function FailureStrip({ doc, radix, dispatch }: { doc: Loaded; radix: Rad
         <div><dt>Signal</dt><dd><code data-testid="failure-signal">{failure.signal_path}</code></dd></div>
         <div><dt>Observation</dt><dd>epoch {failure.observation.epoch}, cycle {failure.observation.cycle}</dd></div>
         <div><dt>Phase</dt><dd>{failure.observation.phase} ({PHASE_LABELS[failure.observation.phase]})</dd></div>
-        <div><dt>Time</dt><dd data-testid="failure-time">{formatTime(failure.observation.time_ps)}</dd></div>
+        <div><dt>Tfail · exact time</dt><dd data-testid="failure-time">{formatTime(failure.observation.time_ps)}</dd></div>
         {failure.transaction_index !== null && (
           <div><dt>Transaction</dt><dd>#{failure.transaction_index}</dd></div>
         )}
-        <div><dt>Expected</dt><dd><Value value={failure.expected} radix={radix} testId="failure-expected" /></dd></div>
-        <div><dt>Actual</dt><dd><Value value={failure.actual} radix={radix} testId="failure-actual" /></dd></div>
+        <div><dt>Expected</dt><dd><Value value={failure.expected} radix={radix === "bin" ? "hex" : radix} testId="failure-expected" /></dd></div>
+        <div><dt>Actual</dt><dd><Value value={failure.actual} radix={radix === "bin" ? "hex" : radix} testId="failure-actual" /></dd></div>
       </dl>
       {others.length > 0 && (
         <p className="also">

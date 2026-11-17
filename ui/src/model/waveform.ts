@@ -80,7 +80,12 @@ export function segments(wave: WaveformWindow, signal: SignalWindow, win: TimeWi
     current = { start: sample.time_ps, end: win.end, value: sample.value, dense: false };
   }
   out.push(current);
-  return out;
+  // Split at dump boundaries so a canvas never draws a held value through
+  // missing evidence. Provider resume samples still determine resumed values.
+  return out.flatMap(seg => {
+    const cuts = [seg.start, ...wave.unavailable.flatMap(g=>[g.start_ps,g.end_ps]).filter(t=>t>seg.start && t<seg.end), seg.end].sort((a,b)=>a<b?-1:a>b?1:0);
+    return cuts.slice(0,-1).map((start,i)=>({...seg,start,end:cuts[i+1]!,value:wave.unavailable.some(g=>start>=g.start_ps && start<g.end_ps)?null:seg.value}));
+  });
 }
 
 /** Every distinct sample time in the window, ascending: cursor stops. */
@@ -119,4 +124,23 @@ export function ensureVisible(win: TimeWindow, t: bigint, bounds: TimeWindow): T
   if (t >= win.start && t < win.end) return win;
   const span = win.end - win.start;
   return clampWindow({ start: t - span / 2n, end: t - span / 2n + span }, bounds);
+}
+
+/** A ten-cycle window uses eleven observed rising edges, never an assumed
+ * period. Short traces retain their entire available coverage. */
+export function tenCycleWindow(wave: WaveformWindow, clockPath: string, center: bigint): TimeWindow {
+  const clock = wave.signals.find(s => s.signal_path === clockPath && s.width === 1);
+  if (!clock) return {start:wave.start_ps,end:wave.end_ps};
+  const rising: bigint[] = [];
+  let previous = clock.initial?.bits;
+  for (const sample of clock.samples) {
+    if (previous === "0" && sample.value.bits === "1" && !wave.unavailable.some(g=>sample.time_ps > g.start_ps && sample.time_ps <= g.end_ps)) rising.push(sample.time_ps);
+    previous = sample.value.bits;
+  }
+  if (rising.length < 11) return {start:wave.start_ps,end:wave.end_ps};
+  const nearest = rising.findIndex(t=>t>=center);
+  const start = Math.max(0, Math.min((nearest < 0 ? rising.length-1 : nearest)-5,rising.length-11));
+  const candidate = {start:rising[start]!,end:rising[start+10]!};
+  if (center < candidate.start || center >= candidate.end || wave.unavailable.some(g=>g.start_ps < candidate.end && g.end_ps > candidate.start)) return {start:wave.start_ps,end:wave.end_ps};
+  return candidate;
 }

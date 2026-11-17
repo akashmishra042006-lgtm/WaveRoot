@@ -41,6 +41,7 @@ export function Suspects({ doc, sel, dispatch }: { doc: Loaded; sel: Selection; 
                   <span className="suspect-where">{where ?? "Source unavailable"}</span>
                   {node && <span className="suspect-obs">{formatObservation(node.observation)}</span>}
                   <span className="suspect-reason">{s.reason}</span>
+                  <span className="confidence">Confidence: not supplied · rank #{s.rank}</span>
                 </button>
               </li>
             );
@@ -89,7 +90,7 @@ export function SourceView({
               const hit = n >= span.line && n <= span.end_line;
               return (
                 <li key={n} value={n} className={hit ? "hit" : undefined} data-line={n} ref={hit && n === span.line ? scrollIntoView : undefined}>
-                  <code>{line || " "}</code>
+                  <code>{highlightSV(line)}</code>
                 </li>
               );
             })}
@@ -107,6 +108,13 @@ export function SourceView({
       {location && <p className="location" data-testid="source-location"><code>{location}</code></p>}
       {body}
     </Panel>
+  );
+}
+
+/** Token decoration only: source bytes and line numbering stay unchanged. */
+function highlightSV(line: string): ReactNode {
+  return line.split(/(\/\/.*$|\b(?:module|endmodule|input|output|logic|wire|assign|always_ff|always_comb|begin|end|if|else|posedge|negedge|parameter|localparam)\b|\b\d+'[bdh][0-9a-fxz_]+\b)/gi).map((token,i) =>
+    <span key={i} className={token.startsWith("//") ? "sv-comment" : /^(module|endmodule|input|output|logic|wire|assign|always_ff|always_comb|begin|end|if|else|posedge|negedge|parameter|localparam)$/.test(token) ? "sv-keyword" : /^\d+'/.test(token) ? "sv-number" : undefined}>{token || ""}</span>
   );
 }
 

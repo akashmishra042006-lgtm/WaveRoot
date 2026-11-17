@@ -1,7 +1,7 @@
-import { memo, useCallback, useMemo, useRef, type Dispatch, type KeyboardEvent, type MouseEvent } from "react";
+import { memo, useEffect, useCallback, useMemo, useRef, type Dispatch, type KeyboardEvent, type MouseEvent } from "react";
 import type { Loaded, SignalWindow, WaveformWindow } from "../model/types";
 import { formatTime, formatValue, shortName, type Radix } from "../model/values";
-import { eventTimes, segments, timeToX, valueAt, xToTime, type TimeWindow } from "../model/waveform";
+import { eventTimes, tenCycleWindow, segments, timeToX, valueAt, xToTime, type TimeWindow } from "../model/waveform";
 import type { Action, Selection } from "../state/selection";
 import { Panel, useWidth, Value } from "./common";
 
@@ -17,7 +17,7 @@ export function Waveform({ doc, sel, dispatch }: { doc: Loaded; sel: Selection; 
   const events = useMemo(() => (wave ? eventTimes(wave) : []), [wave]);
   const win = sel.window;
   const onPick = useCallback(
-    (signalPath: string, e: MouseEvent<SVGSVGElement>) => {
+    (signalPath: string, e: MouseEvent<HTMLCanvasElement>) => {
       if (!win) return;
       const rect = e.currentTarget.getBoundingClientRect();
       const x = (e.clientX - rect.left) * (width / (rect.width || width));
@@ -80,6 +80,7 @@ export function Waveform({ doc, sel, dispatch }: { doc: Loaded; sel: Selection; 
       id="waveform"
       actions={
         <div className="wave-tools" role="group" aria-label="Waveform controls">
+          <button type="button" onClick={() => dispatch({type:"setWindow",window:tenCycleWindow(wave,doc.failure?.clock_path ?? "",sel.cursorTime ?? wave.start_ps)})}>10 cycles</button>
           <button type="button" onClick={() => dispatch({ type: "zoom", factor: 0.5 })}>Zoom in</button>
           <button type="button" onClick={() => dispatch({ type: "zoom", factor: 2 })}>Zoom out</button>
           <button type="button" onClick={() => dispatch({ type: "setWindow", window: { start: wave.start_ps, end: wave.end_ps } })}>Fit</button>
@@ -88,8 +89,9 @@ export function Waveform({ doc, sel, dispatch }: { doc: Loaded; sel: Selection; 
         </div>
       }
     >
+      <p className="hint">10-cycle fit uses recorded rising clock edges; shorter traces show available coverage.</p>
       <p className="readout" aria-live="off">
-        Cursor: <strong data-testid="cursor-time">{sel.cursorTime === null ? "none" : formatTime(sel.cursorTime)}</strong>
+        Cursor ({sel.selectedObservation?.phase ?? "settled"}): <strong data-testid="cursor-time">{sel.cursorTime === null ? "none" : formatTime(sel.cursorTime)}</strong>
         {failureTime !== null && <> · First failure: <span data-testid="failure-marker-time">{formatTime(failureTime)}</span></>}
         {" "}· Window {formatTime(win.start)} – {formatTime(win.end)}
       </p>
@@ -110,8 +112,9 @@ export function Waveform({ doc, sel, dispatch }: { doc: Loaded; sel: Selection; 
         data-testid="wave-tracks"
       >
         <div className="wave-names">
+          <div className="wave-axis-name" style={{height:ROW_H}}>SIGNAL / VALUE</div>
           {wave.signals.map((s) => {
-            const v = sel.cursorTime === null ? null : valueAt(wave, s, sel.cursorTime);
+            const v = sel.cursorTime === null ? null : valueAt(wave, s, sel.selectedObservation?.phase === "before" ? sel.cursorTime - 1n : sel.cursorTime);
             return (
               <div
                 key={s.signal_path}
@@ -128,6 +131,9 @@ export function Waveform({ doc, sel, dispatch }: { doc: Loaded; sel: Selection; 
           })}
         </div>
         <div className="wave-scroll" ref={box}>
+          <div className="wave-axis" style={{width,height:ROW_H}} aria-label="Time axis in picoseconds">
+            {Array.from({length:5},(_,i)=>{const time=win.start+(win.end-win.start)*BigInt(i)/4n;return <span key={i} style={{left:`${i*25}%`,transform:i===4?"translateX(-100%)":i===0?undefined:"translateX(-50%)"}}>{formatTime(time)}</span>;})}
+          </div>
           <div className="wave-stack" style={{ width, height: wave.signals.length * ROW_H }}>
             {wave.signals.map((s) => (
               <Track
@@ -178,7 +184,7 @@ const Track = memo(function Track({
   minTicks: bigint;
   radix: Radix;
   selected: boolean;
-  onPick: (signalPath: string, e: MouseEvent<SVGSVGElement>) => void;
+  onPick: (signalPath: string, e: MouseEvent<HTMLCanvasElement>) => void;
 }) {
   const shapes = useMemo(() => {
     // A handful of path strings per track instead of one element per change.
@@ -220,23 +226,38 @@ const Track = memo(function Track({
     return { level, dense, bus, unknown, unavailable, labels };
   }, [wave, signal, win, width, minTicks, radix]);
 
-  return (
-    <svg
-      width={width}
-      height={ROW_H}
-      className={`track${selected ? " selected" : ""}`}
-      onClick={(e) => onPick(signal.signal_path, e)}
-      role="presentation"
-      data-signal={signal.signal_path}
-    >
-      {shapes.unavailable && <path d={shapes.unavailable} className="seg-unavailable" />}
-      {shapes.dense && <path d={shapes.dense} className="dense-band" />}
-      {shapes.level && <path d={shapes.level} className="bit" />}
-      {shapes.bus && <path d={shapes.bus} className="bus-shape" />}
-      {shapes.unknown && <path d={shapes.unknown} className="bus-shape unknown" />}
-      {shapes.labels.map((l, i) => (
-        <text key={i} x={l.x} y={ROW_H / 2 + 4} className="bus-text">{l.text}</text>
-      ))}
-    </svg>
-  );
+  const canvas = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const el = canvas.current;
+    if (!el) return;
+    const ctx = el.getContext("2d");
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    el.width = Math.round(width * dpr); el.height = ROW_H * dpr;
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, width, ROW_H);
+    const draw = (path: string, stroke: string, fill?: string) => {
+      if (!path) return;
+      const shape = new Path2D(path);
+      ctx.strokeStyle = stroke; ctx.lineWidth = 1.4;
+      if (fill) {ctx.fillStyle = fill; ctx.fill(shape);}
+      ctx.stroke(shape);
+    };
+    draw(shapes.unavailable, "#63738a", "#202b3b");
+    if (shapes.unavailable) {
+      ctx.save(); ctx.clip(new Path2D(shapes.unavailable)); ctx.strokeStyle = "#63738a";
+      ctx.beginPath();
+      for (let x = -ROW_H; x < width; x += 8) {ctx.moveTo(x, ROW_H); ctx.lineTo(x + ROW_H, 0);}
+      ctx.stroke(); ctx.restore();
+    }
+    draw(shapes.dense, "#52d7ed", "#174b5d");
+    draw(shapes.level, "#52d7ed");
+    draw(shapes.bus, "#52d7ed", "#103441");
+    draw(shapes.unknown, "#d5a0ff", "#352345");
+    ctx.font = "11px ui-monospace, monospace"; ctx.fillStyle = "#c8e9ee";
+    for (const label of shapes.labels) ctx.fillText(label.text, label.x, ROW_H/2+4);
+  }, [shapes, width]);
+  return <canvas ref={canvas} style={{width, height:ROW_H}} className={`track${selected ? " selected" : ""}`}
+    onClick={e=>onPick(signal.signal_path,e)} data-signal={signal.signal_path}
+    aria-label={`${signal.signal_path} waveform; values available in the signal list`} />;
 });
