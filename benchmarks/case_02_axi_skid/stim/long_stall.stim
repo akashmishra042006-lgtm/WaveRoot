@@ -1,0 +1,14 @@
+# Multi-cycle stall: payload and valid must hold for three stalled cycles.
+# Columns: rst_n s_valid s_data(hex) m_ready
+1 1 D1 0
+1 1 E2 0
+1 1 E2 0
+1 1 E2 0
+1 1 E2 1
+1 1 F3 1
+1 0 00 1
+1 0 00 1
+1 0 00 1
+1 0 00 0
+1 0 00 0
+1 0 00 0

@@ -1,0 +1,13 @@
+# One transfer, then a mid-stream reset cancels a buffered-but-unsent entry;
+# epoch 1 runs a fresh transfer.
+# Columns: rst_n s_valid s_data(hex) m_ready
+1 1 5E 1
+1 1 6F 1
+1 1 7A 0
+0 0 00 0
+0 0 00 0
+1 1 8B 1
+1 0 00 1
+1 0 00 1
+1 0 00 0
+1 0 00 0

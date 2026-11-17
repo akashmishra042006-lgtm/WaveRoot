@@ -1,0 +1,15 @@
+# Alternate: configure sel=1, reset mid-stream (the correct variant returns
+# the selector to 0; the mutant holds the stale configured value, a known-but-
+# wrong state rather than an X), then select with differing operands.
+# Columns: rst_n in_valid a(hex) b(hex) cfg_we cfg_sel
+1 0 00 00 1 1
+1 1 0A 0B 0 0
+0 0 00 00 0 0
+0 0 00 00 0 0
+1 1 CC DD 0 0
+1 0 00 00 0 0
+1 0 00 00 0 0
+1 0 00 00 0 0
+1 0 00 00 0 0
+1 0 00 00 0 0
+1 0 00 00 0 0

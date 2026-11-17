@@ -1,0 +1,21 @@
+# case_01_fifo_wrap directed schedule (benchmark-spec section 1).
+# Columns: rst_n in_valid in_data(hex) out_ready
+# Cycles 0..8 fill, wrap with a simultaneous pop/push on full, then drain the
+# queue; cycles 9..16 are the eight-cycle no-input drain window.
+1 1 11 0
+1 1 22 0
+1 1 33 0
+1 1 44 0
+1 1 55 1
+1 0 00 1
+1 0 00 1
+1 0 00 1
+1 0 00 1
+1 0 00 0
+1 0 00 0
+1 0 00 0
+1 0 00 0
+1 0 00 0
+1 0 00 0
+1 0 00 0
+1 0 00 0

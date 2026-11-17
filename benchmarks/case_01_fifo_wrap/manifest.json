@@ -1,0 +1,54 @@
+{
+  "case_id": "case_01_fifo_wrap",
+  "schema_version": 1,
+  "simulator": "verilator",
+  "top": "tb",
+  "dut_instance": "dut",
+  "timescale": {"unit_ps": 1, "period_ps": 10000, "first_rising_edge_ps": 5000},
+  "reset": {"path": "tb.dut.rst_n", "active": "0", "release_falling_edge_ps": 20000, "epoch0_cycle0_ps": 25000},
+  "clock": {"path": "tb.dut.clk"},
+  "cycle_limit": 64,
+  "drain_cycles": 8,
+  "signal_map": {
+    "clk": "tb.dut.clk",
+    "rst_n": "tb.dut.rst_n",
+    "in_valid": "tb.dut.in_valid",
+    "in_ready": "tb.dut.in_ready",
+    "in_data": "tb.dut.in_data",
+    "out_valid": "tb.dut.out_valid",
+    "out_ready": "tb.dut.out_ready",
+    "out_data": "tb.dut.out_data",
+    "full": "tb.dut.full",
+    "empty": "tb.dut.empty"
+  },
+  "stimulus_columns": ["rst_n", "in_valid", "in_data", "out_ready"],
+  "schedules": {
+    "directed": {"stim": "stim/directed.stim", "mutant_detected": true},
+    "multi_wrap": {"stim": "stim/multi_wrap.stim", "mutant_detected": false,
+      "note": "masking control: occupancy never crosses 0 or 4 between the two wraps, so the lost wrap bit cancels"},
+    "full_hold": {"stim": "stim/full_hold.stim", "mutant_detected": true},
+    "reset_midway": {"stim": "stim/reset_midway.stim", "mutant_detected": false,
+      "note": "masking control: neither epoch reaches a pointer wrap"}
+  },
+  "analysis_inputs": {
+    "comment": "The analyzer sees only these files plus the produced VCD, golden JSONL, and observed JSONL. The correct variant and benchmarks/graders/ are not analyzer inputs.",
+    "rtl": ["rtl/mutant/fifo.sv"],
+    "testbench": ["tb/tb.sv"],
+    "stimulus": ["stim/directed.stim", "stim/multi_wrap.stim", "stim/full_hold.stim", "stim/reset_midway.stim"]
+  },
+  "control_inputs": {
+    "rtl": ["rtl/correct/fifo.sv"]
+  },
+  "documented_first_failure": {
+    "mode": "cycle",
+    "schedule": "directed",
+    "signal_path": "tb.dut.full",
+    "epoch": 0,
+    "cycle": 3,
+    "phase": "settled",
+    "time_ps": "55000",
+    "expected": "1",
+    "actual": "0",
+    "additional_mismatches": ["tb.dut.empty", "tb.dut.out_valid"]
+  }
+}

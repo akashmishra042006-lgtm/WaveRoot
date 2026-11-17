@@ -1,0 +1,15 @@
+# Independent positive saturation: 127*127 three times (16129, 32258, clamp
+# 32767). The mutant wraps the third sum (48387) to -17149.
+# Columns: rst_n in_valid a(hex) b(hex)
+1 1 7F 7F
+1 1 7F 7F
+1 1 7F 7F
+1 0 00 00
+1 0 00 00
+1 0 00 00
+1 0 00 00
+1 0 00 00
+1 0 00 00
+1 0 00 00
+1 0 00 00
+1 0 00 00

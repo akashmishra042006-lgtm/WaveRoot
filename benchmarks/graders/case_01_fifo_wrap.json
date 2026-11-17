@@ -1,0 +1,23 @@
+{
+  "case_id": "case_01_fifo_wrap",
+  "comment": "Grader-only ground truth. This directory is never part of the analyzer's input bundle. Spans are matched against the listed file hash, not assumed line numbers; recompute the hash before grading.",
+  "mutation": {
+    "file": "benchmarks/case_01_fifo_wrap/rtl/mutant/fifo.sv",
+    "kind": "wrap_bit_toggle_omitted",
+    "description": "The write pointer resets its address at 3 but preserves the old wrap bit instead of toggling it.",
+    "accepted_spans": [
+      {
+        "path": "benchmarks/case_01_fifo_wrap/rtl/mutant/fifo.sv",
+        "start_line": 38,
+        "end_line": 38,
+        "sha256": "27e38a8aa0b7373b819089f8ac1f29995ce45a773ff54f19c0e9e5492a19e14b"
+      }
+    ],
+    "correct_counterpart": {
+      "path": "benchmarks/case_01_fifo_wrap/rtl/correct/fifo.sv",
+      "start_line": 41,
+      "end_line": 41,
+      "sha256": "25c6493f97d3b5f5ccf2b272698845f336dd7327e4b97f507677c406a01350ee"
+    }
+  }
+}

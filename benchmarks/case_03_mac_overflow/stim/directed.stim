@@ -1,0 +1,17 @@
+# case_03_mac_overflow directed schedule (benchmark-spec section 3).
+# Columns: rst_n in_valid a(hex, int8) b(hex, int8)
+# Three -128*125 accumulations: acc -16000, -32000, clamp at -32768.
+# The defective accumulator becomes +17536 at c2 and is observed on out_data
+# at c3 (out_valid=1 from the c2 input, output latency one stage).
+1 1 80 7D
+1 1 80 7D
+1 1 80 7D
+1 0 00 00
+1 0 00 00
+1 0 00 00
+1 0 00 00
+1 0 00 00
+1 0 00 00
+1 0 00 00
+1 0 00 00
+1 0 00 00

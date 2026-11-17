@@ -1,0 +1,17 @@
+# Exact boundary control plus one step beyond: four -128*64 accumulations land
+# exactly on -32768 with no clamping (both variants agree); the fifth needs
+# the clamp (-40960 -> -32768) and the mutant wraps to +24576.
+# Columns: rst_n in_valid a(hex) b(hex)
+1 1 80 40
+1 1 80 40
+1 1 80 40
+1 1 80 40
+1 1 80 40
+1 0 00 00
+1 0 00 00
+1 0 00 00
+1 0 00 00
+1 0 00 00
+1 0 00 00
+1 0 00 00
+1 0 00 00
