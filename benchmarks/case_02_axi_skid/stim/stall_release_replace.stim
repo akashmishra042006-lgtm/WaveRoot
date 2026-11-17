@@ -1,0 +1,14 @@
+# Stall, release exactly when a replacement is offered, then drain.
+# Columns: rst_n s_valid s_data(hex) m_ready
+1 1 1A 1
+1 1 2B 0
+1 1 2B 0
+1 1 2B 1
+1 1 3C 1
+1 1 4D 0
+1 0 00 1
+1 0 00 1
+1 0 00 1
+1 0 00 1
+1 0 00 0
+1 0 00 0

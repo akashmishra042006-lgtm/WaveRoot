@@ -1,0 +1,102 @@
+{
+  "case_id": "case_03_mac_overflow",
+  "schema_version": 1,
+  "top": "tb",
+  "dut_instance": "dut",
+  "timescale": {
+    "unit_ps": 1,
+    "period_ps": 10000,
+    "first_rising_edge_ps": 5000
+  },
+  "clock": {
+    "path": "tb.dut.clk"
+  },
+  "cycle_limit": 64,
+  "drain_cycles": 8,
+  "simulator": "verilator",
+  "reset": {
+    "path": "tb.dut.rst_n",
+    "active": "0",
+    "release_falling_edge_ps": 20000,
+    "epoch0_cycle0_ps": 25000
+  },
+  "signal_map": {
+    "clk": "tb.dut.clk",
+    "rst_n": "tb.dut.rst_n",
+    "in_valid": "tb.dut.in_valid",
+    "a": "tb.dut.a",
+    "b": "tb.dut.b",
+    "out_valid": "tb.dut.out_valid",
+    "out_data": "tb.dut.out_data",
+    "acc_q": "tb.dut.acc_q",
+    "sum_wide": "tb.dut.sum_wide",
+    "sum_cmp": "tb.dut.sum_cmp",
+    "next_acc": "tb.dut.next_acc",
+    "prod": "tb.dut.prod",
+    "valid_q": "tb.dut.valid_q"
+  },
+  "stimulus_columns": [
+    "rst_n",
+    "in_valid",
+    "a",
+    "b"
+  ],
+  "schedules": {
+    "directed": {
+      "stim": "stim/directed.stim",
+      "mutant_detected": true
+    },
+    "pos_saturation": {
+      "stim": "stim/pos_saturation.stim",
+      "mutant_detected": true
+    },
+    "neg_boundary": {
+      "stim": "stim/neg_boundary.stim",
+      "mutant_detected": true
+    },
+    "mixed_bubbles": {
+      "stim": "stim/mixed_bubbles.stim",
+      "mutant_detected": false,
+      "note": "masking control: no overflow occurs, so the narrowed comparison agrees"
+    },
+    "reset_flush": {
+      "stim": "stim/reset_flush.stim",
+      "mutant_detected": false,
+      "note": "masking control: products stay small in both epochs"
+    }
+  },
+  "analysis_inputs": {
+    "comment": "The analyzer sees only these files plus the produced VCD, golden JSONL, and observed JSONL. The correct variant and benchmarks/graders/ are not analyzer inputs. Canonical tb.dut.* paths map to trace paths through the per-run trace_scope_prefix recorded in provenance.json; the prefix is detected, never assumed.",
+    "rtl": [
+      "rtl/mutant/mac.sv"
+    ],
+    "testbench": [
+      "tb/tb.sv"
+    ],
+    "stimulus": [
+      "stim/directed.stim",
+      "stim/pos_saturation.stim",
+      "stim/neg_boundary.stim",
+      "stim/mixed_bubbles.stim",
+      "stim/reset_flush.stim"
+    ]
+  },
+  "control_inputs": {
+    "rtl": [
+      "rtl/correct/mac.sv"
+    ]
+  },
+  "documented_first_failure": {
+    "mode": "cycle",
+    "schedule": "directed",
+    "signal_path": "tb.dut.out_data",
+    "epoch": 0,
+    "cycle": 3,
+    "phase": "settled",
+    "time_ps": "55000",
+    "expected": "1000000000000000",
+    "actual": "0100010010000000",
+    "additional_mismatches": [],
+    "note": "the internal accumulator diverges one cycle earlier (acc_q at cycle 2); that is diagnostic evidence, not the first declared output mismatch"
+  }
+}

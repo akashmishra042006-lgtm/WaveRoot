@@ -1,0 +1,15 @@
+# Control: mixed signs, zero operands, and bubbles; no overflow anywhere, so
+# both variants must pass.
+# Columns: rst_n in_valid a(hex) b(hex)
+1 1 64 64
+1 0 00 00
+1 1 9C 64
+1 0 00 00
+1 1 05 FB
+1 1 00 7F
+1 0 00 00
+1 0 00 00
+1 0 00 00
+1 0 00 00
+1 0 00 00
+1 0 00 00

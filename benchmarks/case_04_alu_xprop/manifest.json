@@ -1,0 +1,92 @@
+{
+  "case_id": "case_04_alu_xprop",
+  "schema_version": 1,
+  "top": "tb",
+  "dut_instance": "dut",
+  "timescale": {
+    "unit_ps": 1,
+    "period_ps": 10000,
+    "first_rising_edge_ps": 5000
+  },
+  "clock": {
+    "path": "tb.dut.clk"
+  },
+  "cycle_limit": 64,
+  "drain_cycles": 8,
+  "simulator": "icarus",
+  "reset": {
+    "path": "tb.dut.rst_n",
+    "active": "0",
+    "release_falling_edge_ps": 20000,
+    "epoch0_cycle0_ps": 25000
+  },
+  "four_state_required": true,
+  "signal_map": {
+    "clk": "tb.dut.clk",
+    "rst_n": "tb.dut.rst_n",
+    "in_valid": "tb.dut.in_valid",
+    "a": "tb.dut.a",
+    "b": "tb.dut.b",
+    "cfg_we": "tb.dut.cfg_we",
+    "cfg_sel": "tb.dut.cfg_sel",
+    "out_valid": "tb.dut.out_valid",
+    "out_data": "tb.dut.out_data",
+    "sel_q": "tb.dut.sel_q"
+  },
+  "stimulus_columns": [
+    "rst_n",
+    "in_valid",
+    "a",
+    "b",
+    "cfg_we",
+    "cfg_sel"
+  ],
+  "schedules": {
+    "directed": {
+      "stim": "stim/directed.stim",
+      "mutant_detected": true
+    },
+    "partial_overlap": {
+      "stim": "stim/partial_overlap.stim",
+      "mutant_detected": true,
+      "note": "agreeing operand bits resolve under the unknown selector: actual 0101xxxx"
+    },
+    "reset_midway": {
+      "stim": "stim/reset_midway.stim",
+      "mutant_detected": true,
+      "note": "after a mid-stream reset the mutant holds a stale known selector: a value_mismatch, not an unknown_value"
+    }
+  },
+  "analysis_inputs": {
+    "comment": "The analyzer sees only these files plus the produced VCD, golden JSONL, and observed JSONL. The correct variant and benchmarks/graders/ are not analyzer inputs. Canonical tb.dut.* paths map to trace paths through the per-run trace_scope_prefix recorded in provenance.json; the prefix is detected, never assumed.",
+    "rtl": [
+      "rtl/mutant/alu.sv"
+    ],
+    "testbench": [
+      "tb/tb.sv"
+    ],
+    "stimulus": [
+      "stim/directed.stim",
+      "stim/partial_overlap.stim",
+      "stim/reset_midway.stim"
+    ]
+  },
+  "control_inputs": {
+    "rtl": [
+      "rtl/correct/alu.sv"
+    ]
+  },
+  "documented_first_failure": {
+    "mode": "cycle",
+    "schedule": "directed",
+    "signal_path": "tb.dut.out_data",
+    "epoch": 0,
+    "cycle": 0,
+    "phase": "settled",
+    "time_ps": "25000",
+    "expected": "00000000",
+    "actual": "xxxxxxxx",
+    "additional_mismatches": [],
+    "note": "requires a genuine four-state simulator; a Verilator randomized-initialization run does not satisfy the gate (spec.md section 13)"
+  }
+}

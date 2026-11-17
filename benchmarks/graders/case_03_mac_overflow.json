@@ -1,0 +1,23 @@
+{
+  "case_id": "case_03_mac_overflow",
+  "comment": "Grader-only ground truth; never part of the analyzer's input bundle. Recompute hashes before grading.",
+  "mutation": {
+    "file": "benchmarks/case_03_mac_overflow/rtl/mutant/mac.sv",
+    "kind": "narrow_before_saturate",
+    "description": "The overflow comparison operand is the sign-extended 16-bit narrowing of the wide sum instead of the 17-bit wide sum, so overflow evidence is lost before clamping.",
+    "accepted_spans": [
+      {
+        "path": "benchmarks/case_03_mac_overflow/rtl/mutant/mac.sv",
+        "start_line": 22,
+        "end_line": 22,
+        "sha256": "2a216b7da8a77717743701eab89b50e8ec53ec3ca3466cee6f8d3636493142d5"
+      }
+    ],
+    "correct_counterpart": {
+      "path": "benchmarks/case_03_mac_overflow/rtl/correct/mac.sv",
+      "start_line": 26,
+      "end_line": 26,
+      "sha256": "ca393391693c64a9dcd484e521d3c4083953dc7563db59d248fe117fbb01e458"
+    }
+  }
+}

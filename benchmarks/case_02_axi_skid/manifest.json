@@ -1,0 +1,90 @@
+{
+  "case_id": "case_02_axi_skid",
+  "schema_version": 1,
+  "top": "tb",
+  "dut_instance": "dut",
+  "timescale": {
+    "unit_ps": 1,
+    "period_ps": 10000,
+    "first_rising_edge_ps": 5000
+  },
+  "clock": {
+    "path": "tb.dut.clk"
+  },
+  "cycle_limit": 64,
+  "drain_cycles": 8,
+  "simulator": "verilator",
+  "reset": {
+    "path": "tb.dut.rst_n",
+    "active": "0",
+    "release_falling_edge_ps": 20000,
+    "epoch0_cycle0_ps": 25000
+  },
+  "signal_map": {
+    "clk": "tb.dut.clk",
+    "rst_n": "tb.dut.rst_n",
+    "s_valid": "tb.dut.s_valid",
+    "s_ready": "tb.dut.s_ready",
+    "s_data": "tb.dut.s_data",
+    "m_valid": "tb.dut.m_valid",
+    "m_ready": "tb.dut.m_ready",
+    "m_data": "tb.dut.m_data"
+  },
+  "stimulus_columns": [
+    "rst_n",
+    "s_valid",
+    "s_data",
+    "m_ready"
+  ],
+  "schedules": {
+    "directed": {
+      "stim": "stim/directed.stim",
+      "mutant_detected": true
+    },
+    "long_stall": {
+      "stim": "stim/long_stall.stim",
+      "mutant_detected": true
+    },
+    "stall_release_replace": {
+      "stim": "stim/stall_release_replace.stim",
+      "mutant_detected": true
+    },
+    "reset_midway": {
+      "stim": "stim/reset_midway.stim",
+      "mutant_detected": true,
+      "note": "cycle mode detects the dropped entry; handshake mode alone passes because the surviving transfers still arrive in order"
+    }
+  },
+  "analysis_inputs": {
+    "comment": "The analyzer sees only these files plus the produced VCD, golden JSONL, and observed JSONL. The correct variant and benchmarks/graders/ are not analyzer inputs. Canonical tb.dut.* paths map to trace paths through the per-run trace_scope_prefix recorded in provenance.json; the prefix is detected, never assumed.",
+    "rtl": [
+      "rtl/mutant/elastic.sv"
+    ],
+    "testbench": [
+      "tb/tb.sv"
+    ],
+    "stimulus": [
+      "stim/directed.stim",
+      "stim/long_stall.stim",
+      "stim/stall_release_replace.stim",
+      "stim/reset_midway.stim"
+    ]
+  },
+  "control_inputs": {
+    "rtl": [
+      "rtl/correct/elastic.sv"
+    ]
+  },
+  "documented_first_failure": {
+    "mode": "cycle",
+    "schedule": "directed",
+    "signal_path": "tb.dut.m_valid",
+    "epoch": 0,
+    "cycle": 1,
+    "phase": "settled",
+    "time_ps": "35000",
+    "expected": "1",
+    "actual": "0",
+    "additional_mismatches": []
+  }
+}

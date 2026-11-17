@@ -1,0 +1,22 @@
+# Alternate schedule: three writes, a mid-stream synchronous reset for two
+# cycles (epoch 0 ends; its pending expectations are cancelled), then a fresh
+# epoch 1 fill-and-drain with different data.
+# Columns: rst_n in_valid in_data(hex) out_ready
+1 1 C1 0
+1 1 C2 0
+1 1 C3 1
+0 0 00 0
+0 0 00 0
+1 1 D1 0
+1 1 D2 0
+1 0 00 1
+1 0 00 1
+1 0 00 1
+1 0 00 0
+1 0 00 0
+1 0 00 0
+1 0 00 0
+1 0 00 0
+1 0 00 0
+1 0 00 0
+1 0 00 0

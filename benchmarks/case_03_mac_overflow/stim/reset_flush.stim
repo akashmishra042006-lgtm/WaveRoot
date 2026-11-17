@@ -1,0 +1,15 @@
+# Accumulate, reset mid-stream (accumulator and output valid must clear), then
+# accumulate again in epoch 1.
+# Columns: rst_n in_valid a(hex) b(hex)
+1 1 7F 7F
+1 1 7F 7F
+0 0 00 00
+0 0 00 00
+1 1 0A 0B
+1 1 02 03
+1 0 00 00
+1 0 00 00
+1 0 00 00
+1 0 00 00
+1 0 00 00
+1 0 00 00

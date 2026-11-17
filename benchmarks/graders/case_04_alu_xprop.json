@@ -1,0 +1,24 @@
+{
+  "case_id": "case_04_alu_xprop",
+  "comment": "Grader-only ground truth; never part of the analyzer's input bundle. Recompute hashes before grading.",
+  "mutation": {
+    "file": "benchmarks/case_04_alu_xprop/rtl/mutant/alu.sv",
+    "kind": "unreset_register",
+    "description": "The reset branch omits the selector register's reset assignment; sel_q has no initializer and starts unknown in a four-state simulation.",
+    "accepted_spans": [
+      {
+        "path": "benchmarks/case_04_alu_xprop/rtl/mutant/alu.sv",
+        "start_line": 18,
+        "end_line": 21,
+        "sha256": "6d0f47fdbf9b4a1dd5f5988fa4138706ac985217be2fffaa080651eec94fdb8b",
+        "note": "the defect is the missing sel_q reset inside this branch"
+      }
+    ],
+    "correct_counterpart": {
+      "path": "benchmarks/case_04_alu_xprop/rtl/correct/alu.sv",
+      "start_line": 24,
+      "end_line": 24,
+      "sha256": "0bd5f829df89fd7301d98bc437beef7654e151889fd4ef6d4639c3162c129fe0"
+    }
+  }
+}

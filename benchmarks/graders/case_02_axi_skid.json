@@ -1,0 +1,24 @@
+{
+  "case_id": "case_02_axi_skid",
+  "comment": "Grader-only ground truth; never part of the analyzer's input bundle. Recompute hashes before grading.",
+  "mutation": {
+    "file": "benchmarks/case_02_axi_skid/rtl/mutant/elastic.sv",
+    "kind": "stall_clears_valid",
+    "description": "When the buffer is occupied and the sink stalls (s_ready low), the added else-branch clears full_q, dropping the stalled transaction's valid.",
+    "accepted_spans": [
+      {
+        "path": "benchmarks/case_02_axi_skid/rtl/mutant/elastic.sv",
+        "start_line": 30,
+        "end_line": 32,
+        "sha256": "f9aee065bac4524bf75c4ef64659260b5284fea0a28404af4c52dfc73048719c"
+      }
+    ],
+    "correct_counterpart": {
+      "path": "benchmarks/case_02_axi_skid/rtl/correct/elastic.sv",
+      "start_line": 30,
+      "end_line": 34,
+      "sha256": "d26f7ac9744f74a97df31eb274816997b7b916a55aca2700ebd397474d101e33",
+      "note": "the correct hold is the absence of that else-branch"
+    }
+  }
+}

@@ -1,0 +1,20 @@
+# case_04_alu_xprop directed schedule (benchmark-spec section 4).
+# Columns: rst_n in_valid a(hex) b(hex) cfg_we cfg_sel
+# c0: all operand bits differ -> unknown selector yields xxxxxxxx (mutant).
+# c1: equal operands -> known 5A even with an unknown selector.
+# c2: configure sel=1, no input.
+# c3: valid input uses the (now known) selector -> 0x34.
+# c4: no input.
+1 1 00 FF 0 0
+1 1 5A 5A 0 0
+1 0 00 00 1 1
+1 1 12 34 0 0
+1 0 00 00 0 0
+1 0 00 00 0 0
+1 0 00 00 0 0
+1 0 00 00 0 0
+1 0 00 00 0 0
+1 0 00 00 0 0
+1 0 00 00 0 0
+1 0 00 00 0 0
+1 0 00 00 0 0
