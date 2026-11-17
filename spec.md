@@ -323,11 +323,22 @@ A known expected value against an actual value with `x`/`z` is always a failure.
 
 ## 9. Coverage, gaps, and missing data
 
-- `TraceCoverage` is the inclusive range `[start_ps, end_ps]`. `end_ps` is
-  explicit trace metadata. A signal's last change does not extend or limit it.
+- `TraceCoverage` is the inclusive range `[start_ps, end_ps]`. A signal's last
+  change does not extend or limit it. *(Proposed, pending verification against
+  real Icarus and Verilator output; see decision 11.)* VCD has no end-of-file
+  marker, so a timestep is known complete only when a later timestamp follows
+  it: for VCD, `end_ps` is the final timestamp minus 1 ps, and records at the
+  final timestamp are not exposed. A trailing timestamp with no records (as
+  Icarus writes at `$finish`) therefore costs nothing. Benchmarks must dump at
+  least one timestep after the last compared edge.
 - A `$dumpoff`/`$dumpon` span is an unavailable interval `[a, b)`. Values inside
   it are unknown data, not held values. Each signal restates its value at `b`.
-- A truncated or malformed trace is `invalid_input`.
+- A malformed or detectably truncated trace is `invalid_input`: an
+  unterminated block or `$comment`, an incomplete record, a file that does not
+  end with a newline, or fewer than two distinct timestamps. Truncation at a
+  timestep boundary is not detectable in VCD; it shortens coverage and can only
+  make a result `inconclusive`, never change a compared value. *(Proposed,
+  pending verification; see decision 11.)*
 
 | Situation | Behavior |
 | --- | --- |
@@ -469,6 +480,8 @@ literal X propagation.
 - A reset that ends an epoch with expectations outstanding is `inconclusive` in
   both modes, never `pass`.
 - A timestamp above `MAX_TIME_PS` is `unsupported`, never a crash.
+- *(Proposed, decision 11.)* Every byte-prefix of a valid VCD is either
+  `invalid_input` or agrees with the full trace on its covered range.
 
 ### 14.3 Track B
 
@@ -540,6 +553,12 @@ change process in section 2 rather than working around it locally:
 10. Expectations cancelled by reset are not waived: an epoch ended with
     expectations outstanding is `inconclusive` in both modes, and a comparison
     with nothing compared is `inconclusive`.
+11. *(Proposed, pending verification.)* VCD coverage ends 1 ps before the final
+    timestamp; a VCD must end with a newline and contain at least two distinct
+    timestamps. Merge gate: real Icarus and Verilator VCD tails are checked. If
+    that check fails or is delayed, this decision is dropped and section 9
+    instead states only that truncation at a timestep boundary is undetectable
+    in VCD.
 
 ## 16. Mock fixture
 
