@@ -15,6 +15,7 @@ from src.waveform.parser import (
     VcdWaveformProvider,
     parse_vcd,
 )
+from src.waveform.select import match_paths
 
 __all__ = [
     "ConversionFailedError",
@@ -28,5 +29,6 @@ __all__ = [
     "compare_files",
     "convert_fst_to_vcd_text",
     "load_trace",
+    "match_paths",
     "parse_vcd",
 ]

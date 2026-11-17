@@ -47,6 +47,7 @@ from src.contracts import (
     WaveformWindow,
     to_picoseconds,
 )
+from src.waveform.select import check_patterns, match_paths
 
 
 class InvalidTraceError(ContractError):
@@ -111,7 +112,8 @@ class ParsedTrace:
 
 
 class _Parser:
-    def __init__(self, text: str) -> None:
+    def __init__(self, text: str, keep: Sequence[str] | None = None) -> None:
+        self._keep = None if keep is None else check_patterns(keep)
         self._tokens = text.split()
         self._position = 0
         self._scopes: list[str] = []
@@ -120,6 +122,8 @@ class _Parser:
         self._unit: TimeUnit | None = None
         self._series: dict[str, _Series] = {}
         self._ignored_codes: set[str] = set()
+        # Widths of identifier codes left out by ``keep``: validated, not stored.
+        self._dropped_widths: dict[str, int] = {}
         self._code_by_path: dict[str, str] = {}
         self._decls: dict[str, SignalDecl] = {}
         self._skipped: list[SkippedVariable] = []
@@ -147,6 +151,8 @@ class _Parser:
         self._parse_header()
         if self._magnitude is None or self._unit is None:
             raise InvalidTraceError("trace has no $timescale")
+        if self._keep is not None:
+            self._apply_keep(self._keep)
         coverage, unavailable = self._parse_body(self._magnitude, self._unit)
         series_by_path = {path: self._series[code] for path, code in self._code_by_path.items()}
         return ParsedTrace(
@@ -254,6 +260,14 @@ class _Parser:
         self._code_by_path[path] = code
         self._decls[path] = SignalDecl(path=path, width=size, bit_range=bit_range)
 
+    def _apply_keep(self, keep: tuple[str, ...]) -> None:
+        kept = set(match_paths(tuple(self._decls), keep))
+        kept_codes = {self._code_by_path[path] for path in kept}
+        for code in [code for code in self._series if code not in kept_codes]:
+            self._dropped_widths[code] = self._series.pop(code).width
+        self._code_by_path = {p: c for p, c in self._code_by_path.items() if p in kept}
+        self._decls = {p: d for p, d in self._decls.items() if p in kept}
+
     # -- body -------------------------------------------------------------
 
     def _parse_body(
@@ -261,6 +275,7 @@ class _Parser:
     ) -> tuple[TraceCoverage, tuple[TimeInterval, ...]]:
         series = self._series
         ignored = self._ignored_codes
+        dropped = self._dropped_widths
         tokens = self._tokens
         count = len(tokens)
         position = self._position
@@ -307,10 +322,11 @@ class _Parser:
             if entry is None:
                 if code in ignored:
                     return
-                raise InvalidTraceError(f"value change for undeclared identifier code {code!r}")
+                if code not in dropped:
+                    raise InvalidTraceError(f"value change for undeclared identifier code {code!r}")
             if not dumping:
                 return
-            width = entry.width
+            width = entry.width if entry is not None else dropped[code]
             if scalar:
                 if width != 1:
                     raise InvalidTraceError(
@@ -325,7 +341,8 @@ class _Parser:
                 value = fill * (width - len(value)) + value
             if time is None:
                 time = first_time = 0
-            pending.setdefault(code, []).append(value)
+            if entry is not None:
+                pending.setdefault(code, []).append(value)
 
         while position < count:
             token = tokens[position]
@@ -360,9 +377,9 @@ class _Parser:
                     raise InvalidTraceError(f"value change {token!r} has no identifier code")
                 code = tokens[position]
                 position += 1
-                if code not in ignored and code not in series:
+                if code not in ignored and code not in series and code not in dropped:
                     raise InvalidTraceError(f"value change for undeclared identifier code {code!r}")
-                if code in series:
+                if code in series or code in dropped:
                     raise InvalidTraceError(f"non-digital value for digital identifier code {code!r}")
             elif token == "$end":
                 continue
@@ -405,13 +422,20 @@ class _Parser:
         return TraceCoverage(start_ps=first_time, end_ps=time), unavailable
 
 
-def parse_vcd(text: str) -> ParsedTrace:
+def parse_vcd(text: str, *, keep: Sequence[str] | None = None) -> ParsedTrace:
     """Parse VCD text into a normalized trace.
 
-    Raises ``InvalidTraceError`` for malformed or inconsistent input and
-    ``UnsupportedPrecisionError`` when a timestamp is not a whole picosecond.
+    With ``keep``, only paths matching one of the hierarchy patterns (see
+    ``src.waveform.select``) are stored and queryable. Value changes for other
+    identifier codes are still validated but not stored; an identifier code
+    shared with a kept path is kept. Coverage and dump gaps are unaffected, and
+    the ``$dumpon`` restate check applies to kept signals only.
+
+    Raises ``InvalidTraceError`` for malformed or inconsistent input,
+    ``UnsupportedPrecisionError`` when a timestamp is not a whole picosecond,
+    and ``InvalidQueryError`` for a malformed or unmatched ``keep`` pattern.
     """
-    return _Parser(text).parse()
+    return _Parser(text, keep).parse()
 
 
 # --------------------------------------------------------------------------
