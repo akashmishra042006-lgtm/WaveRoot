@@ -477,7 +477,7 @@ class _Lowerer:
             sources=sources,
             signals=MappingProxyType(dict(self._signals)),
             drivers=MappingProxyType(drivers),
-            edges=_structural_edges(drivers),
+            edges=structural_edges(drivers),
             diagnostics=tuple(self._diagnostics),
             aliases=MappingProxyType(dict(self._aliases)),
         )
@@ -1800,7 +1800,8 @@ def _assign_signals(assign: GuardedAssign) -> tuple[str, ...]:
     return tuple(found)
 
 
-def _structural_edges(drivers: Mapping[str, tuple[Driver, ...]]) -> tuple[StructuralEdge, ...]:
+def structural_edges(drivers: Mapping[str, tuple[Driver, ...]]) -> tuple[StructuralEdge, ...]:
+    """The flat driver-to-load edge list implied by ``drivers``, in a stable order."""
     edges: dict[StructuralEdge, None] = {}
     for target, found in drivers.items():
         for driver in found:

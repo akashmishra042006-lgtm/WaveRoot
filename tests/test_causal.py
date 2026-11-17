@@ -13,7 +13,9 @@ data, so nothing here compares against it. Only its trace and failure are used.
 from __future__ import annotations
 
 import hashlib
+import json
 import random
+import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
@@ -23,13 +25,18 @@ from pyslang import ast, syntax
 from src.causal import (
     DesignError,
     DesignGraph,
+    GraphFormatError,
     SliceOptions,
     analyze_comparison,
     build_design_graph,
+    dump_design_graph,
+    load_design_graph,
     slice_failure,
     synthesize_assertion,
+    verify_sources,
 )
 from src.causal import expr as ir
+from src.causal.graph_io import EXPR_CODECS
 from src.causal import fourstate as fs
 from src.causal.ast_graph import ProcessKind, SignalKind
 from src.causal.fourstate import CaseFlavor, Tri, Vec
@@ -2309,3 +2316,201 @@ def test_multi_file_design_hashes_every_file_and_points_into_the_child(tmp_path:
         and "core u_core" in lines[s.location.line - 1]
     ]
     assert len(wiring) == 1
+
+
+# --------------------------------------------------------------------------
+# Graph serialization (B-04)
+# --------------------------------------------------------------------------
+
+UNSUPPORTED_SV = """\
+module sub (input logic i, output logic o, inout wire io);
+  assign o = ~i;
+endmodule
+module top (input logic clk, rst_n, en, input logic [3:0] a,
+            output logic [3:0] loop, output logic q, inst_out, inout wire bus);
+  sub u_sub (.i(a[0]), .o(inst_out), .io(bus));
+  always_ff @(posedge clk or negedge rst_n)
+    if (!rst_n) q <= 1'b0; else q <= a[0];
+  always_comb for (int i = 0; i < 4; i++) loop[i] = a[3 - i] & en;
+endmodule
+"""
+
+SELECTS_SV = """\
+module sel (input logic [3:0] a, input logic [1:0] k, input logic [12:0] w,
+            output logic y, output logic [1:0] z, output logic signed [4:0] v,
+            output logic [7:0] big_out);
+  logic [7:0] big [5000];
+  assign y = a[k];
+  assign z = a[k +: 2];
+  assign v = $signed(a);
+  assign big_out = big[w];
+endmodule
+"""
+
+ROUND_TRIP_DESIGNS = {
+    "dut": DUT_SV,
+    "hierarchy": CORE_SV + HIER_TOP_SV,
+    "clocks": CLOCKED_SV,
+    "arrays": ARRAY_SV,
+    "packed": PACKED_SV,
+    "partial": PARTIAL_SV,
+    "structs": STRUCT_SV,
+    "unsupported": UNSUPPORTED_SV,
+    "selects": SELECTS_SV,
+}
+
+
+def node_classes(design: DesignGraph) -> set[type[ir.Expr]]:
+    """Every IR node class that occurs anywhere in ``design``."""
+    found: set[type[ir.Expr]] = set()
+    stack: list[ir.Expr] = []
+    for drivers in design.drivers.values():
+        for driver in drivers:
+            for assign in driver.assigns:
+                stack.extend([assign.rhs, *assign.index_operands])
+                for guard in assign.guards:
+                    stack.extend(ir.guard_operands(guard))
+    while stack:
+        node = stack.pop()
+        found.add(type(node))
+        stack.extend(ir.children(node))
+    return found
+
+
+def all_expr_classes() -> set[type[ir.Expr]]:
+    """Every IR node class, wherever it is defined.
+
+    ``dataclass(slots=True)`` replaces each class with a new one, and the
+    discarded originals can still appear in ``__subclasses__()``. Only the
+    class a module actually binds under its name is live.
+    """
+    found: set[type[ir.Expr]] = set()
+    pending = list(ir.Expr.__subclasses__())
+    while pending:
+        cls = pending.pop()
+        pending.extend(cls.__subclasses__())
+        if getattr(sys.modules[cls.__module__], cls.__qualname__, None) is cls:
+            found.add(cls)
+    return found
+
+
+@pytest.mark.parametrize("name", sorted(ROUND_TRIP_DESIGNS))
+def test_graph_round_trips_through_json(tmp_path: Path, name: str) -> None:
+    design = build(tmp_path, ROUND_TRIP_DESIGNS[name])
+    text = dump_design_graph(design)
+    loaded = load_design_graph(text)
+    assert loaded == design
+    assert loaded.edges == design.edges, "edges are derived again on load"
+    assert dump_design_graph(loaded) == text
+
+
+def test_fifo_graph_round_trips_through_json(fifo_design: DesignGraph) -> None:
+    assert load_design_graph(dump_design_graph(fifo_design)) == fifo_design
+
+
+def test_round_trip_designs_exercise_every_node_class(tmp_path: Path) -> None:
+    seen: set[type[ir.Expr]] = set()
+    for index, source in enumerate(ROUND_TRIP_DESIGNS.values()):
+        folder = tmp_path / str(index)
+        folder.mkdir()
+        seen |= node_classes(build(folder, source))
+    assert seen == all_expr_classes()
+
+
+def test_every_node_class_has_an_encoder() -> None:
+    classes = all_expr_classes()
+    assert classes, "the IR defines node classes"
+    missing = sorted(cls.__name__ for cls in classes if cls not in EXPR_CODECS)
+    assert not missing, f"IR node classes without a JSON encoder: {missing}"
+    tags = [tag for tag, _ in EXPR_CODECS.values()]
+    assert len(tags) == len(set(tags)), "tags are unique"
+
+
+def test_two_independent_builds_dump_identical_text(tmp_path: Path) -> None:
+    first = dump_design_graph(build_design_graph([FIFO_SV], root=REPO))
+    second = dump_design_graph(build_design_graph([FIFO_SV], root=REPO))
+    assert first == second
+    a = dump_design_graph(build(tmp_path, CORE_SV + HIER_TOP_SV))
+    b = dump_design_graph(build(tmp_path, CORE_SV + HIER_TOP_SV))
+    assert a == b
+
+
+def test_slice_of_a_loaded_graph_equals_the_slice_of_the_original(
+    fifo: MockFixture, fifo_failure: FailureAnchor, fifo_design: DesignGraph
+) -> None:
+    loaded = load_design_graph(dump_design_graph(fifo_design))
+    provider = with_memory(fifo.trace)
+    options = SliceOptions(trace_scope=SCOPE, reset_path="tb.dut.rst_n", reset_active="0")
+    for failure in (fifo_failure, OUT_DATA_FAILURE):
+        original = slice_failure(failure, provider, fifo_design, options)
+        again = slice_failure(failure, provider, loaded, options)
+        assert again.model_dump_json() == original.model_dump_json()
+
+
+def test_slice_of_a_loaded_hierarchical_graph_is_unchanged(hier: DesignGraph) -> None:
+    loaded = load_design_graph(dump_design_graph(hier))
+    original = slice_failure(HIER_FAILURE, hier_provider(), hier, OPTIONS)
+    again = slice_failure(HIER_FAILURE, hier_provider(), loaded, OPTIONS)
+    assert again.model_dump_json() == original.model_dump_json()
+
+
+def _edited(text: str, edit: object) -> str:
+    document = json.loads(text)
+    assert callable(edit)
+    edit(document)
+    return json.dumps(document)
+
+
+def _first_rhs(document: dict[str, object]) -> dict[str, object]:
+    drivers = document["drivers"]
+    assert isinstance(drivers, list)
+    rhs = drivers[0]["assigns"][0]["rhs"]
+    assert isinstance(rhs, dict)
+    return rhs
+
+
+@pytest.mark.parametrize(
+    ("edit", "message"),
+    [
+        (lambda d: d.update(format_version=2), "unsupported format_version 2"),
+        (lambda d: d.update(format_version=True), "unsupported format_version True"),
+        (lambda d: d.pop("format_version"), "missing field format_version"),
+        (lambda d: d.update(extra=1), "unknown fields ['extra']"),
+        (lambda d: d.pop("aliases"), "missing fields ['aliases']"),
+        (lambda d: _first_rhs(d).update(k="no_such_node"), "unknown IR node tag 'no_such_node'"),
+        (lambda d: _first_rhs(d).update(surprise=0), "unknown fields ['surprise']"),
+        (lambda d: _first_rhs(d).update(width=True), "expected an integer"),
+        (lambda d: d["signals"][0].update(kind="sideways"), "unknown SignalKind 'sideways'"),
+        (lambda d: d["sources"][0].update(sha256="nope"), "source"),
+    ],
+)
+def test_malformed_graph_text_is_rejected_with_a_clear_error(
+    fifo_design: DesignGraph, edit: object, message: str
+) -> None:
+    text = _edited(dump_design_graph(fifo_design), edit)
+    with pytest.raises(GraphFormatError) as raised:
+        load_design_graph(text)
+    assert message in str(raised.value)
+    with pytest.raises(GraphFormatError, match="not JSON"):
+        load_design_graph("{")
+
+
+def test_edited_source_is_reported_and_carried_into_every_report(tmp_path: Path) -> None:
+    source = tmp_path / "hier.sv"
+    source.write_text(CORE_SV + HIER_TOP_SV, encoding="utf-8")
+    design = build_design_graph([source], root=tmp_path)
+    text = dump_design_graph(design)
+    assert verify_sources(design, tmp_path) == ()
+    assert load_design_graph(text, root=tmp_path) == design
+
+    source.write_text(CORE_SV + HIER_TOP_SV + "// edited\n", encoding="utf-8")
+    (changed,) = verify_sources(design, tmp_path)
+    assert changed.code == "SOURCE_CHANGED" and "hier.sv has changed" in changed.message
+    stale = load_design_graph(text, root=tmp_path)
+    assert "SOURCE_CHANGED" in {d.code for d in stale.diagnostics}
+    report = slice_failure(HIER_FAILURE, hier_provider(), stale, OPTIONS)
+    assert "SOURCE_CHANGED" in codes(report), "a stale graph is never sliced silently"
+
+    source.unlink()
+    (missing,) = verify_sources(design, tmp_path)
+    assert missing.code == "SOURCE_MISSING"

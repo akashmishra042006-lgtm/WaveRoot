@@ -72,9 +72,12 @@ _PROVENANCE_NOTE: Final = (
     "Backward dependency slice computed by src.causal from the RTL and the trace. "
     "Suspects are ranked candidates for investigation, not proof of a root cause."
 )
-# Design diagnostics that mean a driver may be missing from the graph. They are
-# repeated in every report because they weaken any slice of that design.
-_GLOBAL_CAVEATS: Final = frozenset({"UNSUPPORTED_SCOPE", "UNSUPPORTED_LVALUE"})
+# Design diagnostics that mean a driver may be missing from the graph, or that the
+# graph may not describe the current sources. They are repeated in every report
+# because they weaken any slice of that design.
+_GLOBAL_CAVEATS: Final = frozenset(
+    {"UNSUPPORTED_SCOPE", "UNSUPPORTED_LVALUE", "SOURCE_CHANGED", "SOURCE_MISSING"}
+)
 
 
 @dataclass(frozen=True, slots=True)

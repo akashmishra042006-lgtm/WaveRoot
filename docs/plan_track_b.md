@@ -17,7 +17,8 @@ is background. Where they differ, the spec wins.
 | `src/causal/ast_graph.py` | `build_design_graph`: pyslang elaboration lowered to a `DesignGraph` (signals, per-signal `Driver` lists of `GuardedAssign`, flat `StructuralEdge` list). |
 | `src/causal/backward_slicer.py` | `slice_failure`, `analyze_comparison`: time-unrolled, value-pruned backward BFS that returns a `CausalReport`. |
 | `src/causal/sva_synth.py` | `synthesize_assertion`: candidate checker module plus `bind` for the top suspect. |
-| `tests/test_causal.py` | 73 engine tests against `MockWaveformProvider`. |
+| `src/causal/graph_io.py` | `dump_design_graph`, `load_design_graph`, `verify_sources` (B-04): deterministic JSON form of a `DesignGraph`, format version 1, internal to Track B. |
+| `tests/test_causal.py` | Engine tests against `MockWaveformProvider`: 73 for the first engine, 121 after B-01 to B-04. |
 
 Supported today: module instances with input and output ports (B-01; signals
 are named by path from the top instance, such as `u_core.q`, and clocks are
