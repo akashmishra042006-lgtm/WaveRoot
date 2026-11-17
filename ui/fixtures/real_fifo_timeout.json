@@ -8,8 +8,8 @@
   "schedule": "directed",
   "fixture_mode": false,
   "comparison_adapter": {
-    "name": "track_c_selfcheck",
-    "kind": "benchmark_self_check"
+    "name": "track_a_waveform",
+    "kind": "analysis"
   },
   "causal_adapter": null,
   "primary_mode": "cycle",
@@ -26,7 +26,7 @@
     "message": "build exceeded 0.05 s",
     "simulator": "verilator",
     "tool_version": "Verilator 5.020 2024-01-01 rev (Debian 5.020-1)",
-    "run_dir": "artifacts/case_01_fifo_wrap-mutant-directed-033a42f62b60",
+    "run_dir": "artifacts/case_01_fifo_wrap-mutant-directed-0195d4d157cd",
     "steps": [
       {
         "name": "build",
@@ -38,14 +38,14 @@
           "--top-module",
           "tb",
           "--Mdir",
-          "artifacts/case_01_fifo_wrap-mutant-directed-033a42f62b60/obj",
+          "artifacts/case_01_fifo_wrap-mutant-directed-0195d4d157cd/obj",
           "benchmarks/case_01_fifo_wrap/tb/tb.sv",
           "benchmarks/case_01_fifo_wrap/rtl/mutant/fifo.sv"
         ],
         "exit_code": -15,
-        "duration_s": 0.102,
+        "duration_s": 0.103,
         "log": "build.log",
-        "log_bytes_total": 712,
+        "log_bytes_total": 0,
         "log_truncated": false
       }
     ],

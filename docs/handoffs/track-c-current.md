@@ -1,36 +1,29 @@
-# November 17, 2026 — dark dashboard refresh
+# PR #18 — dashboard review fixes (November 17, 2026)
 
-Branch `feat/track-c-ui` fast-forwarded onto merged main `96e2593` before this
-refresh. React 19 + TypeScript, Tailwind CSS, React Flow, and high-DPI Canvas
-replace the earlier React 18/SVG presentation. Shared schema/fixtures unchanged.
+React 19, Tailwind, React Flow and Canvas presentation on feat/track-c-ui.
+Locked contracts unchanged. Latest main, including C04 part 1 (#17), is merged.
 
-The failure hero shows exact Tfail, raw binary and hex; ranked suspects explicitly
-state confidence is not supplied. Copyable report-level assertions retain their
-validation labels. Graphs distinguish cyan combinational / amber dashed sequential
-edges, actual previous-cycle carries, retained active paths, unknown controls, and
-dimmed pruned branches. A shared selection synchronizes nodes, waveform rows,
-exact before/settled cursor values, and revision-checked, highlighted SV source.
-A bounded ps ruler and observed-clock ten-cycle fit avoid assumed clock periods;
-short/gapped traces retain available coverage. Dump gaps are not drawn as held
-values. The fixture remains explicitly synthetic, with no invented assertions.
+Review fixes: Chrome is again the CI default; local Chromium is an explicit
+browser override. Unknown hex has no numeric prefix and the failure strip
+respects radix. Cursor text omits absent phase. Named valueBefore documents
+strict-before integer-ps lookup, including missing prior history. Blank source
+lines retain height. Gap-free waveform segments avoid per-segment cloning.
 
-Validation in this cloud workspace:
-- Frontend: 54 tests pass; strict typecheck + production build pass.
-- Browser: Chromium 151, 1440/1024/768/375 px, no page overflow/visible control
-  overlaps/page errors. Actual React Flow node clicks synchronize waveform/source.
-  Screenshots inspected. On Intel Xeon Platinum 8573C, 100 signals × 1,000
-  transitions + 1,000 nodes: selection median 17.2 ms, max 143.2 ms; cursor median
-  17.0 ms. The occasional selection maximum exceeds the 100 ms target. Initial
-  load ~3.5 s. Graph drawing still capped at 400 nodes (accessible list above it).
-- `uv sync --locked`; `uv run mypy src/`: 17 files clean.
-- `uv run pytest -m "not integration" -q`: 421 passed, 69 deselected.
-- `uv run pytest tests/track_c/test_ui_fixtures.py -q`: 13 passed.
-- Full simulator gate could not pass locally: Verilator/Icarus are absent
-  (421 passed, 12 skipped, 54 failed, 3 errors). CI must run those real tool gates;
-  this is not full A → B → C integration coverage.
+Validation of this revision:
+- UI: 61 tests, strict TypeScript check and production build passed.
+- Chromium 159.0.8154.6: widths 1440/1024/768/375, no overflow, visible control
+  overlaps or page errors. Checks require Canvas pixels, React Flow paths,
+  preserved blank-line heights, and synchronized node clicks. Screenshots inspected.
+- 100 signals x 1,000 transitions, 1,000 nodes on Intel Xeon Platinum 8573C:
+  selection median 16.7 ms, max 27.8 ms; cursor median 16.3 ms, max 19.5 ms.
+  Local measurements are not a guarantee on shared CI runners.
+- Locked sync and mypy passed (17 files); Python unit gate: 436 passed,
+  74 integration cases deselected.
+- Local simulator gate remains blocked by absent Verilator/Icarus/FST tools.
+  CI must verify these; simulator tests were not skipped or weakened here.
 
-Next: verify CI simulator gates, then continue C04 integration. Previous handoff
-below is historical; its statement that Track C PRs are unmerged is superseded.
+Next for this PR: reviewer re-review and CI verification. Earlier handoff below
+records previous milestones, not validation claims for this UI revision.
 
 ---
 
@@ -149,21 +142,25 @@ Not done: the offline-API state (C06 has no API yet); causal graphs and
 waveform windows from real engines (Tracks A/B). Fixture-only UI is not full
 integration.
 
-## C04 — partly unblocked
+## C04 part 1 — done (Track A comparison is the default)
 
-Track A is on `main` and already agrees with the self-check on every real
-benchmark trace. Next: a `ComparisonAdapter` over `src.waveform.compare`
-(kind `analysis`) as the CLI default, and Track A's waveform options wired
-into `cli.py`. The causal half still waits for Track B (#6). The self-check
-stays labeled `benchmark_self_check` and is not Track A coverage.
+`WaveformComparison` (`src/app/adapters.py`, kind `analysis`) wraps Track A's
+`run_comparison` without touching Track A. `analyze` defaults to
+`--comparison track-a` and takes Track A's `--keep`, `--cache-dir`, and
+`--fst-timeout`; `--comparison self-check` keeps the labeled
+`benchmark_self_check` path. `compare --trace T --golden G` runs Track A's
+engine on a saved trace using `add_waveform_arguments` unchanged. Tests:
+`tests/track_c/test_c04_waveform.py`. UI fixtures were regenerated; the UI keeps
+one real self-check record (`real_fifo_fail_selfcheck.json`) to test the note
+that only that adapter shows. Still open: C04 part 2 (Track B causal adapter)
+waits for Track B (#6, #15).
 
 ## Open questions
 
 - Dev 1: spec §8.1 forbids epochs without golden records, so handshake
   schedules need ≥1 transfer per epoch (`build_goldens` enforces this).
 - A console-script entry point would touch shared `pyproject.toml`; deferred to
-  a focused PR. Track A's waveform options get wired into `cli.py` when Track A
-  re-lands.
+  a focused PR.
 - `benchmarks/common/benchlib.run_simulation` still has its own simple runner
   for the benchmark tests; it could delegate to `src.app.runner.Runner`.
 
@@ -178,6 +175,5 @@ every gate against the whole stack.
 
 ## Next single ticket
 
-C04 part 1: the Track A comparison adapter (see above). Independent cold
-review of C03+C05 (Prompt 5) in a fresh session. Then C04 part 2 when Track B
-merges, and C06 (local API).
+Independent cold review of C03+C05+C04 part 1 (Prompt 5) in a fresh session.
+Then C04 part 2 when Track B merges, and C06 (local API).

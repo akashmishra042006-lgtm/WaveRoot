@@ -91,7 +91,7 @@ def main(out: Path) -> int:
     results: dict[str, object] = {"layout": {}, "machine": {}}
     failed = False
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(channel=os.environ.get("WAVEROOT_BROWSER_CHANNEL", "chromium"), headless=True)
+        browser = pw.chromium.launch(channel=os.environ.get("WAVEROOT_BROWSER_CHANNEL", "chrome"), headless=True)
         results["machine"] = {
             "browser": browser.version,
             "platform": platform.platform(),
@@ -114,6 +114,12 @@ def main(out: Path) -> int:
                 assert page.get_by_test_id("failure-marker-time").inner_text() == "55000 ps"
             page.get_by_test_id("suspect-s1").click()
             page.wait_for_timeout(150)
+            if width > 700:
+                assert page.locator(".react-flow__edge-path").count() > 0
+                assert page.locator('canvas[data-signal="tb.dut.wptr"]').evaluate(
+                    "(c) => c.getContext('2d').getImageData(0,0,c.width,c.height).data.some((v,i) => i%4===3 && v>0)")
+                assert page.locator(".code li").evaluate_all(
+                    "(lines) => lines.filter(l => !l.textContent.trim()).every(l => l.textContent === ' ' && l.getBoundingClientRect().height > 10)")
             page.screenshot(path=str(out / f"fifo-{width}.png"), full_page=True)
             page_scroll = page.evaluate("document.documentElement.scrollWidth - window.innerWidth")
             overlaps = page.evaluate(OVERLAP_JS)

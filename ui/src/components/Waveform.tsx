@@ -1,7 +1,7 @@
 import { memo, useEffect, useCallback, useMemo, useRef, type Dispatch, type KeyboardEvent, type MouseEvent } from "react";
 import type { Loaded, SignalWindow, WaveformWindow } from "../model/types";
 import { formatTime, formatValue, shortName, type Radix } from "../model/values";
-import { eventTimes, tenCycleWindow, segments, timeToX, valueAt, xToTime, type TimeWindow } from "../model/waveform";
+import { eventTimes, tenCycleWindow, segments, timeToX, valueAt, valueBefore, xToTime, type TimeWindow } from "../model/waveform";
 import type { Action, Selection } from "../state/selection";
 import { Panel, useWidth, Value } from "./common";
 
@@ -91,7 +91,7 @@ export function Waveform({ doc, sel, dispatch }: { doc: Loaded; sel: Selection; 
     >
       <p className="hint">10-cycle fit uses recorded rising clock edges; shorter traces show available coverage.</p>
       <p className="readout" aria-live="off">
-        Cursor ({sel.selectedObservation?.phase ?? "settled"}): <strong data-testid="cursor-time">{sel.cursorTime === null ? "none" : formatTime(sel.cursorTime)}</strong>
+        Cursor{sel.selectedObservation ? ` (${sel.selectedObservation.phase})` : ""}: <strong data-testid="cursor-time">{sel.cursorTime === null ? "none" : formatTime(sel.cursorTime)}</strong>
         {failureTime !== null && <> · First failure: <span data-testid="failure-marker-time">{formatTime(failureTime)}</span></>}
         {" "}· Window {formatTime(win.start)} – {formatTime(win.end)}
       </p>
@@ -114,7 +114,7 @@ export function Waveform({ doc, sel, dispatch }: { doc: Loaded; sel: Selection; 
         <div className="wave-names">
           <div className="wave-axis-name" style={{height:ROW_H}}>SIGNAL / VALUE</div>
           {wave.signals.map((s) => {
-            const v = sel.cursorTime === null ? null : valueAt(wave, s, sel.selectedObservation?.phase === "before" ? sel.cursorTime - 1n : sel.cursorTime);
+            const v = sel.cursorTime === null ? null : (sel.selectedObservation?.phase === "before" ? valueBefore(wave, s, sel.cursorTime) : valueAt(wave, s, sel.cursorTime));
             return (
               <div
                 key={s.signal_path}

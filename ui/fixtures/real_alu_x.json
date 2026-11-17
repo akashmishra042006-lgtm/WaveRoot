@@ -8,8 +8,8 @@
   "schedule": "directed",
   "fixture_mode": false,
   "comparison_adapter": {
-    "name": "track_c_selfcheck",
-    "kind": "benchmark_self_check"
+    "name": "track_a_waveform",
+    "kind": "analysis"
   },
   "causal_adapter": null,
   "primary_mode": "cycle",
@@ -38,7 +38,7 @@
           "width": 8,
           "bits": "xxxxxxxx"
         },
-        "detail": "out_data expected 00000000 actual xxxxxxxx"
+        "detail": "out_data: expected 00000000 but observed xxxxxxxx at epoch 0 cycle 0 (settled, 25000 ps)"
       },
       "additional_mismatches": [],
       "compared_values": 2,
@@ -57,7 +57,7 @@
     "message": "build and simulation completed",
     "simulator": "icarus",
     "tool_version": "Icarus Verilog version 12.0 (stable) ()",
-    "run_dir": "artifacts/case_04_alu_xprop-mutant-directed-97a3c259fe80",
+    "run_dir": "artifacts/case_04_alu_xprop-mutant-directed-1a0ac24cc509",
     "steps": [
       {
         "name": "build",
@@ -67,7 +67,7 @@
           "-s",
           "tb",
           "-o",
-          "artifacts/case_04_alu_xprop-mutant-directed-97a3c259fe80/sim.vvp",
+          "artifacts/case_04_alu_xprop-mutant-directed-1a0ac24cc509/sim.vvp",
           "benchmarks/case_04_alu_xprop/tb/tb.sv",
           "benchmarks/case_04_alu_xprop/rtl/mutant/alu.sv"
         ],
@@ -81,10 +81,10 @@
         "name": "simulate",
         "argv": [
           "/usr/bin/vvp",
-          "artifacts/case_04_alu_xprop-mutant-directed-97a3c259fe80/sim.vvp",
+          "artifacts/case_04_alu_xprop-mutant-directed-1a0ac24cc509/sim.vvp",
           "+stim=benchmarks/case_04_alu_xprop/stim/directed.stim",
-          "+obs=artifacts/case_04_alu_xprop-mutant-directed-97a3c259fe80/observed.jsonl",
-          "+vcd=artifacts/case_04_alu_xprop-mutant-directed-97a3c259fe80/trace.vcd",
+          "+obs=artifacts/case_04_alu_xprop-mutant-directed-1a0ac24cc509/observed.jsonl",
+          "+vcd=artifacts/case_04_alu_xprop-mutant-directed-1a0ac24cc509/trace.vcd",
           "+cycle_limit=64"
         ],
         "exit_code": 0,
@@ -100,7 +100,7 @@
       "tb/tb.sv": "9d305ef5680b9ebc6ffc05a52b630ab4761086e987eb3d7b819141b2171badc5"
     },
     "trace": "trace.vcd",
-    "trace_sha256": "cc6bfe829825145baeb987ea4d7db7713275fa4c1b336e772f06397bba1c70a0",
+    "trace_sha256": "90b30cad0e53893fd5597a1fe8b7417bf976fe13eafd3d664b577236f97bb6f5",
     "trace_scope_prefix": ""
   }
 }

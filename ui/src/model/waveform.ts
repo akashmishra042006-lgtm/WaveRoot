@@ -33,6 +33,12 @@ export function valueAt(wave: WaveformWindow, signal: SignalWindow, t: bigint): 
   return value === null ? { kind: "unavailable" } : { kind: "value", value };
 }
 
+/** Final recorded value strictly before t, at integer-picosecond precision.
+ * At the window boundary, prior history is unavailable: do not invent it. */
+export function valueBefore(wave: WaveformWindow, signal: SignalWindow, t: bigint): ValueAt {
+  return valueAt(wave, signal, t - 1n);
+}
+
 export function timeToX(t: bigint, win: TimeWindow, width: number): number {
   const span = win.end - win.start;
   if (span <= 0n) return 0;
@@ -80,6 +86,9 @@ export function segments(wave: WaveformWindow, signal: SignalWindow, win: TimeWi
     current = { start: sample.time_ps, end: win.end, value: sample.value, dense: false };
   }
   out.push(current);
+  // Most traces have no dump gaps. Avoid cloning every visible segment in
+  // that common case (100,000 segments in the browser performance fixture).
+  if (wave.unavailable.length === 0) return out;
   // Split at dump boundaries so a canvas never draws a held value through
   // missing evidence. Provider resume samples still determine resumed values.
   return out.flatMap(seg => {

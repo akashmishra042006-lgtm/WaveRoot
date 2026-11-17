@@ -5,6 +5,7 @@ import mockFifo from "../../tests/fixtures/mock_fifo_failure.json";
 import mockFifoSource from "../../tests/fixtures/mock_fifo_wrap.sv?raw";
 import realFifoFail from "../fixtures/real_fifo_fail.json";
 import realFifoPass from "../fixtures/real_fifo_pass.json";
+import realFifoSelfCheck from "../fixtures/real_fifo_fail_selfcheck.json";
 import realAluX from "../fixtures/real_alu_x.json";
 import realTimeout from "../fixtures/real_fifo_timeout.json";
 import inconclusive from "../fixtures/inconclusive.json";
@@ -22,6 +23,7 @@ export interface Sample {
 export const SAMPLES: readonly Sample[] = [
   { id: "mock-fifo", label: "Mock FIFO failure (synthetic)", group: "sample", document: mockFifo },
   { id: "real-fifo-fail", label: "FIFO mutant, real Verilator run", group: "real", document: realFifoFail },
+  { id: "real-fifo-selfcheck", label: "FIFO mutant, benchmark self-check (real run)", group: "real", document: realFifoSelfCheck },
   { id: "real-fifo-pass", label: "FIFO correct, real Verilator run", group: "real", document: realFifoPass },
   { id: "real-alu-x", label: "ALU unknown value, real Icarus run", group: "real", document: realAluX },
   { id: "real-timeout", label: "FIFO run that timed out (real infrastructure error)", group: "real", document: realTimeout },

@@ -113,6 +113,7 @@ export function SourceView({
 
 /** Token decoration only: source bytes and line numbering stay unchanged. */
 function highlightSV(line: string): ReactNode {
+  if (line.length === 0) return " ";
   return line.split(/(\/\/.*$|\b(?:module|endmodule|input|output|logic|wire|assign|always_ff|always_comb|begin|end|if|else|posedge|negedge|parameter|localparam)\b|\b\d+'[bdh][0-9a-fxz_]+\b)/gi).map((token,i) =>
     <span key={i} className={token.startsWith("//") ? "sv-comment" : /^(module|endmodule|input|output|logic|wire|assign|always_ff|always_comb|begin|end|if|else|posedge|negedge|parameter|localparam)$/.test(token) ? "sv-keyword" : /^\d+'/.test(token) ? "sv-number" : undefined}>{token || ""}</span>
   );

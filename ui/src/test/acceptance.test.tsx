@@ -174,6 +174,7 @@ describe("scenario 2: the cursor never moves the failure", () => {
       track!.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: 50 }));
     });
     expect(screen.getByTestId("cursor-time")).not.toHaveTextContent("55000 ps");
+    expect(screen.getByTestId("cursor-time").parentElement).not.toHaveTextContent("Cursor (settled)");
     expect(screen.getByTestId("failure-marker-time")).toHaveTextContent("55000 ps");
   });
 });
@@ -193,7 +194,11 @@ describe("scenario 3: unknown values are never shown as numbers", () => {
     expect(screen.getByTestId("failure-expected")).toHaveTextContent("= 0");
 
     await user.selectOptions(screen.getByTestId("radix"), "hex");
-    expect(screen.getByTestId("failure-actual")).toHaveTextContent("= 0xxx");
+    expect(screen.getByTestId("failure-actual")).toHaveTextContent("= xx");
+    expect(screen.getByTestId("failure-actual")).not.toHaveTextContent("0x");
+    await user.selectOptions(screen.getByTestId("radix"), "bin");
+    expect(screen.getByTestId("failure-actual")).not.toHaveTextContent("=");
+    expect(screen.getByTestId("failure-expected")).not.toHaveTextContent("=");
   });
 
   it("explains that this real failure is not localized", async () => {
@@ -201,7 +206,18 @@ describe("scenario 3: unknown values are never shown as numbers", () => {
     render(<App />);
     await loadSample(user, /ALU unknown value/);
     expect(screen.getByTestId("unlocalized")).toHaveTextContent("CAUSAL_UNAVAILABLE");
+  });
+
+  it("labels the benchmark self-check, and only the self-check", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await loadSample(user, /benchmark self-check/);
     expect(screen.getByTestId("comparison-counts")).toHaveTextContent("benchmark self-check");
+
+    // A record compared by Track A's waveform engine (kind "analysis") carries no such note.
+    await loadSample(user, /ALU unknown value, real Icarus run/);
+    expect(screen.getByTestId("comparison-counts")).not.toHaveTextContent("self-check");
+    expect(screen.getByTestId("comparison-counts")).not.toHaveTextContent("not waveform analysis");
   });
 });
 

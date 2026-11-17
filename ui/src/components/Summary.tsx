@@ -56,8 +56,8 @@ export function FailureStrip({ doc, radix, dispatch }: { doc: Loaded; radix: Rad
         {failure.transaction_index !== null && (
           <div><dt>Transaction</dt><dd>#{failure.transaction_index}</dd></div>
         )}
-        <div><dt>Expected</dt><dd><Value value={failure.expected} radix={radix === "bin" ? "hex" : radix} testId="failure-expected" /></dd></div>
-        <div><dt>Actual</dt><dd><Value value={failure.actual} radix={radix === "bin" ? "hex" : radix} testId="failure-actual" /></dd></div>
+        <div><dt>Expected</dt><dd><Value value={failure.expected} radix={radix} testId="failure-expected" /></dd></div>
+        <div><dt>Actual</dt><dd><Value value={failure.actual} radix={radix} testId="failure-actual" /></dd></div>
       </dl>
       {others.length > 0 && (
         <p className="also">
