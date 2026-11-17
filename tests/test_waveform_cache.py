@@ -24,6 +24,7 @@ from src.waveform import (
     parse_vcd,
 )
 from src.waveform import cache as cache_module
+from src.waveform.fst import converter_identity
 from tests.test_waveform import GAP_TEXT, HEADER, vcd_from_mock
 from tests.test_waveform_fst import fake_converter
 
@@ -127,7 +128,7 @@ def test_keep_change_is_a_miss_and_keep_order_is_irrelevant(tmp_path: Path, fixt
     data = text.encode()
     assert cache_key(data, keep=["b.*", "a.**"]) == cache_key(data, keep=["a.**", "b.*", "a.**"])
     assert len({cache_key(data, keep=None), cache_key(data, keep=["**"]), cache_key(data, keep=["*.**"])}) == 3
-    assert cache_key(data, keep=None) != cache_key(data, keep=None, converter_version="fst2vcd 3.3")
+    assert cache_key(data, keep=None) != cache_key(data, keep=None, converter_identity="fst2vcd 3.3")
 
 
 def test_cache_is_opt_in(tmp_path: Path, fixture: MockFixture, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -213,6 +214,35 @@ def test_damaged_entry_is_ignored_and_rebuilt(tmp_path: Path, fixture: MockFixtu
     assert rebuilt.trace == parse_vcd(text)
     if damage != "directory":  # a directory in the way cannot be replaced; the load still succeeds
         assert entry.read_text(encoding="utf-8") == good
+
+
+def test_consistently_edited_entry_is_detected_and_rebuilt(tmp_path: Path) -> None:
+    text = GAP_TEXT
+    trace = write(tmp_path / "gap.vcd", text)
+    cache_dir = tmp_path / "cache"
+    load_cached(trace, cache_dir=cache_dir)
+    entry = cache_dir / f"{cache_key(text.encode(), keep=None)}.json"
+    good = entry.read_text(encoding="utf-8")
+    payload = json.loads(good)
+    data = next(s for s in payload["series"] if s["width"] == 8)
+
+    # A well-formed but different value.
+    edited = json.loads(good)
+    target = next(s for s in edited["series"] if s["width"] == 8)
+    target["values"][0] = "00000011" if data["values"][0] != "00000011" else "00000001"
+    entry.write_text(json.dumps(edited), encoding="utf-8")
+    assert load_cached(trace, cache_dir=cache_dir).trace == parse_vcd(text)
+    assert entry.read_text(encoding="utf-8") == good
+
+    # The restated sample where the dump gap ends is removed.
+    edited = json.loads(good)
+    target = next(s for s in edited["series"] if s["width"] == 8)
+    resume = target["times"].index("50000")
+    del target["times"][resume], target["values"][resume]
+    entry.write_text(json.dumps(edited), encoding="utf-8")
+    rebuilt = load_cached(trace, cache_dir=cache_dir)
+    assert rebuilt.trace == parse_vcd(text)
+    rebuilt.get_window_slice(["top.data"], 0, 70001)
 
 
 def test_entry_for_other_content_is_never_returned(tmp_path: Path, fixture: MockFixture) -> None:
@@ -332,12 +362,50 @@ def test_fst_key_includes_the_converter_version(
     assert load_cached(fst, cache_dir=cache_dir).trace == parse_vcd(text)
     assert load_cached(fst, cache_dir=cache_dir).trace == parse_vcd(text)
     assert conversions() == 1
-    expected = cache_key(b"opaque FST bytes", keep=None, converter_version="fst2vcd 3.3.100")
+    identity = converter_identity()
+    assert identity.startswith("sha256:") and identity.endswith("version:fst2vcd 3.3.100")
+    expected = cache_key(b"opaque FST bytes", keep=None, converter_identity=identity)
     assert entries(cache_dir) == [f"{expected}.json"]
 
     version_file.write_text("fst2vcd 3.3.200")
     load_cached(fst, cache_dir=cache_dir)
     assert conversions() == 2
+    assert len(entries(cache_dir)) == 2
+
+
+def test_fst_key_changes_when_the_converter_changes_even_if_version_output_does_not(
+    tmp_path: Path, fixture: MockFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GTKWave's fst2vcd may answer --version with its usage text; that must not hide an upgrade."""
+    text = vcd_from_mock(fixture.trace)
+    bin_dir = tmp_path / "bin"
+    counter = tmp_path / "conversions.txt"
+
+    def install(build: str) -> None:
+        fake_converter(
+            bin_dir,
+            f"""
+            # build {build}
+            if sys.argv[1:] == ["--version"]:
+                print("Usage: fst2vcd [OPTION]... [FSTFILE]")
+                sys.exit(0)
+            with open({str(counter)!r}, "a") as handle:
+                handle.write("x")
+            sys.stdout.write({text!r})
+            """,
+        )
+
+    install("one")
+    monkeypatch.setenv("PATH", str(bin_dir))
+    fst = tmp_path / "sim.fst"
+    fst.write_bytes(b"opaque FST bytes")
+    cache_dir = tmp_path / "cache"
+    load_cached(fst, cache_dir=cache_dir)
+    load_cached(fst, cache_dir=cache_dir)
+    assert counter.read_text() == "x"
+    install("two")  # same --version output, different converter
+    load_cached(fst, cache_dir=cache_dir)
+    assert counter.read_text() == "xx"
     assert len(entries(cache_dir)) == 2
 
 

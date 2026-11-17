@@ -14,6 +14,7 @@ is best-effort: a cache directory that cannot be written never fails a load.
 
 from __future__ import annotations
 
+import bisect
 import contextlib
 import hashlib
 import json
@@ -25,7 +26,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from src.contracts import SignalDecl, TimeInterval, TimeUnit, TraceCoverage
-from src.waveform.fst import convert_fst_to_vcd_text, converter_version, trace_kind
+from src.waveform.fst import convert_fst_to_vcd_text, converter_identity, trace_kind
 from src.waveform.parser import ParsedTrace, SkippedVariable, VcdWaveformProvider, _Series, parse_vcd
 from src.waveform.select import check_patterns
 
@@ -35,9 +36,10 @@ DEFAULT_CACHE_DIR: Final = Path(".waveroot-cache")
 _DECIMAL_RE: Final = re.compile(r"0|[1-9][0-9]*")
 _BITS_RE: Final = re.compile(r"[01xz]+")
 _MAGNITUDES: Final = frozenset({1, 10, 100})
-_TOP_KEYS: Final = frozenset(
+_BODY_KEYS: Final = frozenset(
     {"cache_format_version", "key", "timescale", "coverage", "unavailable", "decls", "skipped", "series", "series_index"}
 )
+_TOP_KEYS: Final = _BODY_KEYS | {"digest"}
 
 
 class _CorruptEntry(ValueError):
@@ -45,20 +47,21 @@ class _CorruptEntry(ValueError):
 
 
 def cache_key(
-    trace_bytes: bytes, *, keep: Sequence[str] | None, converter_version: str | None = None
+    trace_bytes: bytes, *, keep: Sequence[str] | None, converter_identity: str | None = None
 ) -> str:
     """SHA-256 hex digest identifying a parse of ``trace_bytes``.
 
-    ``converter_version`` is the FST converter's ``--version`` output and is
-    ``None`` for VCD input. The order and repetition of ``keep`` patterns do not
-    matter; ``keep=None`` (everything) is distinct from any pattern list.
+    ``converter_identity`` comes from ``fst.converter_identity`` (a digest of the
+    converter executable plus its ``--version`` output) and is ``None`` for VCD
+    input. The order and repetition of ``keep`` patterns do not matter;
+    ``keep=None`` (everything) is distinct from any pattern list.
     """
     patterns = None if keep is None else sorted(set(check_patterns(keep)))
     header = json.dumps(
         {
             "cache_format_version": CACHE_FORMAT_VERSION,
             "keep": patterns,
-            "converter_version": converter_version,
+            "converter_identity": converter_identity,
         },
         sort_keys=True,
     ).encode("utf-8")
@@ -84,8 +87,8 @@ def load_cached(
     kind = trace_kind(path)
     keep_patterns = None if keep is None else check_patterns(keep)
     data = path.read_bytes()
-    version = converter_version(timeout_s=timeout_s) if kind == "fst" else None
-    key = cache_key(data, keep=keep_patterns, converter_version=version)
+    identity = converter_identity(timeout_s=timeout_s) if kind == "fst" else None
+    key = cache_key(data, keep=keep_patterns, converter_identity=identity)
     entry = cache_dir / f"{key}.json"
 
     cached = _read_entry(entry, key)
@@ -121,7 +124,7 @@ def _encode(trace: ParsedTrace, key: str) -> dict[str, Any]:
             position = index_of[id(entry)] = len(series)
             series.append(entry)
         series_index.append(position)
-    return {
+    body: dict[str, Any] = {
         "cache_format_version": CACHE_FORMAT_VERSION,
         "key": key,
         "timescale": {"magnitude": trace.timescale_magnitude, "unit": trace.timescale_unit.value},
@@ -142,6 +145,18 @@ def _encode(trace: ParsedTrace, key: str) -> dict[str, Any]:
         ],
         "series_index": series_index,
     }
+    body["digest"] = _digest(body)
+    return body
+
+
+def _digest(body: dict[str, Any]) -> str:
+    """SHA-256 over the canonical JSON of an entry without its digest field.
+
+    It detects any edit to a stored entry, including well-formed ones that the
+    field checks alone would accept (for example a changed value).
+    """
+    canonical = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(canonical.encode("ascii")).hexdigest()
 
 
 def _write_entry(cache_dir: Path, entry: Path, payload: dict[str, Any]) -> None:
@@ -203,6 +218,8 @@ def _decode(payload: object, key: str) -> ParsedTrace:
     assert isinstance(payload, dict)
     _require(payload["cache_format_version"] == CACHE_FORMAT_VERSION, "format version")
     _require(payload["key"] == key, "key")
+    body = {name: value for name, value in payload.items() if name != "digest"}
+    _require(payload["digest"] == _digest(body), "digest")
 
     timescale = payload["timescale"]
     _require(isinstance(timescale, dict) and set(timescale) == {"magnitude", "unit"}, "timescale")
@@ -232,6 +249,7 @@ def _decode(payload: object, key: str) -> ParsedTrace:
         series_by_path[decl.path] = series[index]
         used.add(index)
     _require(len(used) == len(series), "unreferenced series")
+    _check_invariants(series, coverage, unavailable)
 
     return ParsedTrace(
         timescale_magnitude=magnitude,
@@ -242,6 +260,24 @@ def _decode(payload: object, key: str) -> ParsedTrace:
         skipped=tuple(skipped),
         _series_by_path=series_by_path,
     )
+
+
+def _check_invariants(
+    series: list[_Series], coverage: TraceCoverage, unavailable: tuple[TimeInterval, ...]
+) -> None:
+    """Cross-field rules every parsed trace satisfies (see ``parser.py``)."""
+    for earlier, later in zip(unavailable, unavailable[1:]):
+        _require(earlier.end_ps < later.start_ps, "dump gaps overlap or are unordered")
+    for entry in series:
+        if entry.times:
+            _require(coverage.start_ps <= entry.times[0] and entry.times[-1] <= coverage.end_ps, "time outside coverage")
+        present = set(entry.times)
+        for gap in unavailable:
+            if gap.end_ps <= coverage.end_ps:
+                # $dumpon must restate every signal where the gap ends.
+                _require(gap.end_ps in present, "missing restated value at a dump gap end")
+            first = bisect.bisect_left(entry.times, gap.start_ps)
+            _require(first == len(entry.times) or entry.times[first] >= gap.end_ps, "value inside a dump gap")
 
 
 def _decode_series(item: object) -> _Series:
