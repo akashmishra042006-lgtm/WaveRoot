@@ -7,7 +7,9 @@ its standard output is the VCD text, and nothing is written next to the input.
 
 from __future__ import annotations
 
+import hashlib
 import math
+import os
 import shutil
 import subprocess
 from collections.abc import Sequence
@@ -60,8 +62,8 @@ def _stderr_text(raw: bytes | str | None) -> str:
     return text[:STDERR_LIMIT]
 
 
-def _run(argv: list[str], timeout_s: float, what: str) -> bytes:
-    """Run ``argv`` and return its stdout, mapping every failure to a contract error."""
+def _run(argv: list[str], timeout_s: float, what: str) -> tuple[bytes, str]:
+    """Run ``argv``; return stdout and truncated stderr, mapping failures to contract errors."""
     try:
         completed = subprocess.run(argv, capture_output=True, timeout=timeout_s, check=False)
     except subprocess.TimeoutExpired as error:
@@ -80,7 +82,7 @@ def _run(argv: list[str], timeout_s: float, what: str) -> bytes:
             returncode=completed.returncode,
             stderr=stderr,
         )
-    return completed.stdout
+    return completed.stdout, stderr
 
 
 def convert_fst_to_vcd_text(
@@ -98,24 +100,44 @@ def convert_fst_to_vcd_text(
         pass
     resolved = _resolve(executable)
     what = f"{executable} on {str(fst_path)!r}"
-    stdout = _run([resolved, str(fst_path)], timeout_s, what)
+    # An absolute path never begins with "-", so a file named "-fother.fst" is
+    # not read as the option "-f other.fst".
+    stdout, stderr = _run([resolved, str(fst_path.absolute())], timeout_s, what)
     try:
         text = stdout.decode("utf-8")
     except UnicodeDecodeError as error:
         raise ConversionFailedError(
-            f"{what} produced output that is not UTF-8 text (exit status 0)", returncode=0, stderr=""
+            f"{what} produced output that is not UTF-8 text (exit status 0); stderr: {stderr!r}",
+            returncode=0,
+            stderr=stderr,
         ) from error
     if not text.strip():
-        raise ConversionFailedError(f"{what} produced no output (exit status 0)", returncode=0, stderr="")
+        raise ConversionFailedError(
+            f"{what} produced no output (exit status 0); stderr: {stderr!r}", returncode=0, stderr=stderr
+        )
     return text
 
 
-def converter_version(*, timeout_s: float = 120.0, executable: str = DEFAULT_CONVERTER) -> str:
-    """The converter's ``--version`` output (stdout), stripped."""
+def converter_identity(*, timeout_s: float = 120.0, executable: str = DEFAULT_CONVERTER) -> str:
+    """A string that changes whenever the converter may convert differently.
+
+    It combines a SHA-256 of the resolved executable file with its ``--version``
+    output. The digest is what matters: GTKWave's ``fst2vcd`` may answer
+    ``--version`` with usage text that does not change across releases, so the
+    output is included only as a readable hint and a failure there is ignored.
+    """
     timeout_s = _check_timeout(timeout_s)
     resolved = _resolve(executable)
-    stdout = _run([resolved, "--version"], timeout_s, f"{executable} --version")
-    return stdout.decode("utf-8", errors="replace").strip()
+    try:
+        digest = hashlib.sha256(Path(os.path.realpath(resolved)).read_bytes()).hexdigest()
+    except OSError as error:
+        raise ConverterUnavailableError(f"{executable} at {resolved!r} cannot be read: {error}") from error
+    try:
+        stdout, _ = _run([resolved, "--version"], timeout_s, f"{executable} --version")
+        version = stdout.decode("utf-8", errors="replace").strip()
+    except ConversionFailedError:
+        version = ""
+    return f"sha256:{digest} version:{version}"
 
 
 def trace_kind(path: Path) -> str:

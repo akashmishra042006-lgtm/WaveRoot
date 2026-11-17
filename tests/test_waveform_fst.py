@@ -120,6 +120,28 @@ def test_empty_output_is_a_conversion_failure(tmp_path: Path, input_fst: Path, o
     assert caught.value.returncode == 0
 
 
+def test_empty_output_keeps_the_converters_stderr(tmp_path: Path, input_fst: Path) -> None:
+    script = fake_converter(tmp_path / "bin", 'sys.stderr.write("bad FST magic " + "M" * 3000)\n')
+    with pytest.raises(ConversionFailedError, match="no output") as caught:
+        convert_fst_to_vcd_text(input_fst, executable=str(script))
+    assert caught.value.stderr == ("bad FST magic " + "M" * 3000)[:2000]
+    assert "bad FST magic" in str(caught.value)
+
+
+def test_leading_dash_file_name_is_never_read_as_an_option(
+    tmp_path: Path, fifo_vcd: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    script = echo_converter(tmp_path / "bin", fifo_vcd)
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "-fother.fst").write_bytes(b"opaque")
+    monkeypatch.chdir(work)
+    convert_fst_to_vcd_text(Path("-fother.fst"), executable=str(script))
+    argv = json.loads((tmp_path / "bin" / "argv.json").read_text())
+    assert argv == [str(Path.cwd() / "-fother.fst")]
+    assert not argv[0].startswith("-")
+
+
 def test_non_utf8_output_is_a_conversion_failure(tmp_path: Path, input_fst: Path) -> None:
     script = fake_converter(tmp_path / "bin", 'sys.stdout.buffer.write(b"\\xff\\xfe$date")\n')
     with pytest.raises(ConversionFailedError, match="UTF-8"):
@@ -227,10 +249,13 @@ def test_compare_files_reads_fst_and_maps_converter_problems_to_error(
 
 
 def _explicitly_requested(request: pytest.FixtureRequest) -> bool:
-    """True when the run selected integration tests by marker or named this test."""
+    """True unless this is an unfiltered run.
+
+    Any ``-m`` or ``-k`` selection that still includes this test, or naming it
+    by node ID, counts as asking for it, so it fails instead of skipping.
+    """
     config = request.config
-    markexpr: str = config.option.markexpr or ""
-    if "integration" in markexpr:
+    if config.option.markexpr or config.option.keyword:
         return True
     name = request.node.name
     return any(name in str(arg) for arg in config.args)
@@ -242,8 +267,8 @@ def test_real_fst_converts_to_the_equivalent_vcd(
 ) -> None:
     """Round-trip the mock FIFO trace through vcd2fst and fst2vcd.
 
-    Fails (never skips) when run with ``-m integration`` or by node ID and the
-    GTKWave tools are absent; in an unfiltered run it skips with the reason.
+    Fails (never skips) when selected with ``-m``, ``-k``, or its node ID and the
+    GTKWave tools are absent; only in an unfiltered run does it skip with the reason.
     """
     missing = [tool for tool in ("vcd2fst", "fst2vcd") if shutil.which(tool) is None]
     if missing:
