@@ -42,6 +42,7 @@ from src.contracts import (
 )
 from src.waveform import (
     InvalidTraceError,
+    UnsupportedTraceError,
     VcdWaveformProvider,
     compare,
     compare_files,
@@ -1259,3 +1260,170 @@ def test_keep_never_changes_a_kept_signal_under_property_tests(
     paths = [path for path in full.trace.signal_paths if path in kept_paths]
     kept = VcdWaveformProvider(parse_vcd(text, keep=sorted(kept_paths)))
     assert_kept_signals_unchanged(full, kept, paths)
+
+
+# --------------------------------------------------------------------------
+# Review regressions (PR #4 audit)
+# --------------------------------------------------------------------------
+
+CRQ_HEADER = """$timescale 1 ns $end
+$scope module top $end
+$var wire 1 c clk $end
+$var wire 1 r rst_n $end
+$var wire 4 q q [3:0] $end
+$upscope $end
+$enddefinitions $end
+"""
+ONLY_Q = {**CYCLE_HEADER, "signals": CYCLE_HEADER["signals"][:1]}
+
+
+def crq(events: dict[int, str]) -> VcdWaveformProvider:
+    """clk/rst_n/q trace from ``{time_ns: "space-separated records"}``."""
+    lines = [CRQ_HEADER.rstrip("\n")]
+    for time_ns in sorted(events):
+        lines.append(f"#{time_ns}")
+        lines += events[time_ns].split()
+    return VcdWaveformProvider.from_text("\n".join(lines) + "\n")
+
+
+def clocked(extra: dict[int, str], *, last: int = 60) -> dict[int, str]:
+    """clk toggling every 5 ns (rising at 5, 15, ...), rst_n low until its release at 10 ns."""
+    events = {0: "0c 0r b0001 q"}
+    for time_ns in range(5, last + 1, 5):
+        events[time_ns] = "1c" if time_ns % 10 == 5 else "0c"
+    events[10] += " 1r"
+    for time_ns, records in extra.items():
+        events[time_ns] = f"{events.get(time_ns, '')} {records}".strip()
+    return events
+
+
+def test_reset_released_exactly_at_a_rising_edge_is_inconclusive() -> None:
+    events = clocked({})
+    events[10] = "0c"  # no release on the falling edge ...
+    events[15] = "1c 1r"  # ... it is released at the rising edge instead
+    result = compare(crq(events), golden(ONLY_Q, cycle_records({"q": "0001"})))
+    assert (result.status, codes_of(result)) == (AnalysisStatus.INCONCLUSIVE, ["RESET_AT_EDGE"])
+
+
+def test_reset_asserted_exactly_at_a_rising_edge_is_inconclusive() -> None:
+    events = clocked({35: "0r"})
+    three = golden(ONLY_Q, cycle_records({"q": "0001"}, {"q": "0001"}, {"q": "0001"}))
+    result = compare(crq(events), three)
+    assert (result.status, codes_of(result)) == (AnalysisStatus.INCONCLUSIVE, ["RESET_AT_EDGE"])
+
+
+def test_same_timestamp_reset_pulse_at_an_edge_is_inconclusive() -> None:
+    events = clocked({35: "0r 1r"})  # 1 -> 0 -> 1 at the edge; the final value is unchanged
+    three = golden(ONLY_Q, cycle_records({"q": "0001"}, {"q": "0001"}, {"q": "0001"}))
+    result = compare(crq(events), three)
+    assert (result.status, codes_of(result)) == (AnalysisStatus.INCONCLUSIVE, ["RESET_AT_EDGE"])
+    # The same pulse between edges is legal and does not affect sampling.
+    between = compare(crq(clocked({30: "0r 1r"})), three)
+    assert between.status is AnalysisStatus.PASS
+
+
+def test_later_clock_ambiguity_does_not_hide_an_earlier_failure() -> None:
+    glitch = clocked({35: "0c 1c"})  # three clock records at 35 ns
+    provider = crq(glitch)
+    with pytest.raises(IndeterminateClockError):
+        provider.get_clock_edges("top.clk", 0, provider.get_coverage().end_ps + 1)
+
+    wrong = golden(ONLY_Q, cycle_records({"q": "0011"}, {"q": "0011"}, {"q": "0011"}))
+    failed = compare(provider, wrong)
+    assert failed.status is AnalysisStatus.FAIL
+    assert failed.failure is not None and failed.failure.observation.time_ps == 15000
+    assert_reproducible_before(provider, failed, 35000)
+
+    # Cycle mode that completes before the ambiguity passes, like a later dump gap.
+    assert compare(provider, golden(ONLY_Q, cycle_records({"q": "0001"}, {"q": "0001"}))).status is AnalysisStatus.PASS
+    # Expectations that need the ambiguous region stay inconclusive.
+    blocked = compare(provider, golden(ONLY_Q, cycle_records({"q": "0001"}, {"q": "0001"}, {"q": "0001"})))
+    assert (blocked.status, codes_of(blocked)) == (AnalysisStatus.INCONCLUSIVE, ["CLOCK_INDETERMINATE"])
+    assert blocked.compared_values == 2
+
+
+def assert_reproducible_before(provider: VcdWaveformProvider, result: ComparisonResult, limit_ps: int) -> None:
+    assert result.failure is not None
+    for anchor in (result.failure, *result.additional_mismatches):
+        if anchor.actual is not None:
+            observed = provider.get_value_at(anchor.signal_path, anchor.observation.time_ps, phase=anchor.observation.phase)
+            assert observed == anchor.actual
+        assert anchor.observation.time_ps in provider.get_clock_edges(anchor.clock_path, 0, limit_ps)
+
+
+def test_handshake_epoch_cancelled_without_any_transfer_is_not_a_pass() -> None:
+    drive = [{"valid": "0"}, {"rst_n": "0"}, {"valid": "0"}, {"valid": "0"}]
+    provider = VcdWaveformProvider.from_text(build_vcd(STREAM, drive))
+    result = compare(provider, golden(HANDSHAKE_HEADER, transactions(1)))
+    assert result.status is AnalysisStatus.INCONCLUSIVE
+    assert result.compared_values == 0
+    assert codes_of(result) == ["EXPECTATIONS_CANCELLED_BY_RESET", "NOTHING_COMPARED"]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        '#0\n$dumpvars\n0!\nb1 "\n',  # $dumpvars never closed
+        '#0\n$dumpvars\n0!\nb1 "\n#10\n1!\n#20\n',  # time advances inside $dumpvars
+        '#0\n$dumpvars\n0!\n$dumpall\nb1 "\n$end\n#10\n',  # nested block
+        '#0\n0!\nb1 "\n$end\n#10\n',  # $end with no open block
+        '#0\n0!\nb1 "\n#10\n$dumpoff\nx!\nbx "\n',  # $dumpoff never closed
+    ],
+)
+def test_unterminated_or_unbalanced_dump_blocks_are_rejected(body: str) -> None:
+    with pytest.raises(InvalidTraceError):
+        parse_vcd(HEADER + body)
+
+
+def test_value_changes_inside_a_dump_gap_are_still_validated() -> None:
+    wide = HEADER + '#0\n0!\nb1 "\n#10\n$dumpoff\nx!\nb111111111 "\n$end\n#20\n$dumpon\n0!\nb1 "\n$end\n#30\n'
+    for keep in (None, ["top.clk"]):
+        with pytest.raises(InvalidTraceError, match="wider"):
+            parse_vcd(wide, keep=keep)
+    scalar = HEADER + '#0\n0!\nb1 "\n#10\n$dumpoff\nx!\nx"\n$end\n#20\n$dumpon\n0!\nb1 "\n$end\n#30\n'
+    with pytest.raises(InvalidTraceError, match="scalar"):
+        parse_vcd(scalar)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        HEADER + "#0\n0!\n#²\n",  # superscript two passes str.isdigit()
+        HEADER + "#0\n0!\n#٣\n",  # Arabic-Indic three
+        HEADER.replace('$var wire 8 "', '$var wire ² "') + "#0\n",
+    ],
+)
+def test_non_ascii_digits_are_invalid_not_a_crash(text: str) -> None:
+    with pytest.raises(InvalidTraceError):
+        parse_vcd(text)
+
+
+def test_absurdly_long_timestamps_are_unsupported_not_a_crash(tmp_path: Path) -> None:
+    long_time = "9" * 5000
+    with pytest.raises(UnsupportedTraceError, match="digits"):
+        parse_vcd(HEADER + f"#0\n0!\n#{long_time}\n")
+    vcd = tmp_path / "long.vcd"
+    vcd.write_text(HEADER + f"#0\n0!\n#{long_time}\n", encoding="utf-8")
+    result = compare_files(vcd, FIXTURES / "mock_fifo_golden.jsonl")
+    assert (result.status, codes_of(result)) == (AnalysisStatus.UNSUPPORTED, ["TRACE_UNSUPPORTED"])
+    # Long but representable timestamps stay exact.
+    big = "1" + "0" * 3000
+    provider = VcdWaveformProvider.from_text(HEADER + f"#0\n0!\n#{big}\n1!\n")
+    assert provider.get_coverage().end_ps == int(big) * 1000
+
+
+def test_unknown_clock_transition_during_comparison_is_a_diagnostic() -> None:
+    events = clocked({})
+    events[25] = "xc"  # instead of rising at 25 ns, the clock goes unknown
+    provider = crq(events)
+    assert provider.get_clock_edges("top.clk", 0, 60001) == (5000, 15000, 35000, 45000, 55000)
+    result = compare(provider, golden(ONLY_Q, cycle_records({"q": "0001"}, {"q": "0001"})))
+    assert result.status is AnalysisStatus.PASS
+    assert codes_of(result) == ["CLOCK_UNKNOWN_TRANSITION"]
+    assert "25000" in result.diagnostics[0].message
+    # An unknown clock before reset is first observed active is not reported.
+    early = clocked({})
+    early[0] = "xc 0r b0001 q"
+    early[2] = "0c"
+    quiet = compare(crq(early), golden(ONLY_Q, cycle_records({"q": "0001"})))
+    assert (quiet.status, quiet.diagnostics) == (AnalysisStatus.PASS, ())

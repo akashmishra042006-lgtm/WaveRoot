@@ -69,6 +69,12 @@ class _Run:
     golden: GoldenTrace
     compared: int = 0
     notes: list[Diagnostic] = field(default_factory=list)
+    # Clock transitions to or from x/z (spec 6.1: not edges, but diagnostics).
+    unknown_clock_times: tuple[int, ...] = ()
+    # The first edge at which reset was observed active, and the last edge the
+    # comparison reached (None once the whole scanned range was walked).
+    active_from: int | None = None
+    reached: int | None = None
 
     @property
     def mode(self) -> ComparisonMode:
@@ -82,6 +88,17 @@ class _Run:
         diagnostics: list[Diagnostic] | None = None,
     ) -> ComparisonResult:
         failures = failures or []
+        extra = [*self._clock_notes(), *(diagnostics or [])]
+        if status is AnalysisStatus.PASS and self.compared == 0:
+            # A pass needs at least one compared value (spec 8.4), for example
+            # when reset cancelled every expectation before any transfer.
+            status = AnalysisStatus.INCONCLUSIVE
+            extra.append(
+                Diagnostic(
+                    code="NOTHING_COMPARED",
+                    message="no expected value was compared, so the trace cannot pass",
+                )
+            )
         return ComparisonResult(
             schema_version=1,
             status=status,
@@ -89,8 +106,25 @@ class _Run:
             failure=failures[0] if failures else None,
             additional_mismatches=tuple(failures[1:]),
             compared_values=self.compared,
-            diagnostics=tuple([*self.notes, *(diagnostics or [])]),
+            diagnostics=tuple([*self.notes, *extra]),
         )
+
+    def _clock_notes(self) -> list[Diagnostic]:
+        if self.active_from is None:
+            return []
+        times = [
+            t for t in self.unknown_clock_times
+            if t > self.active_from and (self.reached is None or t <= self.reached)
+        ]
+        if not times:
+            return []
+        return [
+            Diagnostic(
+                code="CLOCK_UNKNOWN_TRANSITION",
+                message=f"clock {self.golden.header.clock} has {len(times)} transition(s) to or "
+                f"from x/z after reset was observed, first at {times[0]} ps; they are not edges",
+            )
+        ]
 
 
 def compare(provider: WaveformProvider, golden: GoldenTrace) -> ComparisonResult:
@@ -144,19 +178,75 @@ def _check_signals(run: _Run) -> None:
             )
 
 
-def _clock_edges(run: _Run) -> tuple[tuple[int, ...], bool]:
-    """Rising edges up to the first dump gap, and whether a gap cut the scan."""
+@dataclass(frozen=True, slots=True)
+class _Cut:
+    """Why the edge scan stops before the end of the trace."""
+
+    code: str  # TRACE_GAP or CLOCK_INDETERMINATE
+    detail: str
+
+
+def _clock_edges(run: _Run) -> tuple[tuple[int, ...], _Cut | None]:
+    """Rising edges in time order up to the first dump gap or ambiguous clock instant.
+
+    Evidence is taken chronologically: a gap or same-timestamp clock glitch only
+    limits the edges after it, so it cannot erase an earlier divergence.
+    """
     header = run.golden.header
-    coverage = run.provider.get_coverage()
-    whole = run.provider.get_window_slice([header.clock], coverage.start_ps, coverage.end_ps + 1)
+    provider = run.provider
+    coverage = provider.get_coverage()
+    whole = provider.get_window_slice([header.clock], coverage.start_ps, coverage.end_ps + 1)
     scan_end = whole.unavailable[0].start_ps if whole.unavailable else coverage.end_ps + 1
+    cut = _Cut("TRACE_GAP", "") if whole.unavailable else None
+
+    window = whole.signals[0]
+    previous = window.initial.bits if window.initial is not None else "x"
+    unknown: list[int] = []
+    for sample in window.samples:
+        if sample.time_ps >= scan_end:
+            break
+        if previous in ("x", "z") or sample.value.bits in ("x", "z"):
+            unknown.append(sample.time_ps)
+        previous = sample.value.bits
+    run.unknown_clock_times = tuple(unknown)
+
     if scan_end <= coverage.start_ps:
-        return (), True
+        return (), cut
     try:
-        edges = run.provider.get_clock_edges(header.clock, coverage.start_ps, scan_end)
+        return provider.get_clock_edges(header.clock, coverage.start_ps, scan_end), cut
     except IndeterminateClockError as error:
-        raise _Stop(AnalysisStatus.INCONCLUSIVE, "CLOCK_INDETERMINATE", str(error)) from error
-    return edges, bool(whole.unavailable)
+        ambiguous = _first_ambiguous_instant(run, coverage.start_ps, scan_end)
+        edges = provider.get_clock_edges(header.clock, coverage.start_ps, ambiguous) if ambiguous > coverage.start_ps else ()
+        return edges, _Cut("CLOCK_INDETERMINATE", str(error))
+
+
+def _first_ambiguous_instant(run: _Run, start_ps: int, end_ps: int) -> int:
+    """Smallest t in [start_ps, end_ps) such that edges over [start_ps, t] are ambiguous."""
+    clock = run.golden.header.clock
+    low, high = start_ps, end_ps - 1
+    while low < high:
+        middle = (low + high) // 2
+        try:
+            run.provider.get_clock_edges(clock, start_ps, middle + 1)
+        except IndeterminateClockError:
+            high = middle
+        else:
+            low = middle + 1
+    return low
+
+
+def _require_stable_reset(run: _Run, time_ps: int, reset_before: str) -> None:
+    """Spec 7: a reset change at the edge timestamp makes the comparison inconclusive."""
+    reset = run.golden.header.reset
+    message = f"reset {reset} changes at the clock edge at {time_ps} ps"
+    if run.provider.get_value_at(reset, time_ps, phase=_SETTLED).bits != reset_before:
+        raise _Stop(AnalysisStatus.INCONCLUSIVE, "RESET_AT_EDGE", message)
+    try:
+        # Reset is one bit, so the edge query refuses several transitions at one
+        # timestamp, such as a 1 -> 0 -> 1 pulse whose final value is unchanged.
+        run.provider.get_clock_edges(reset, time_ps, time_ps + 1)
+    except IndeterminateClockError as error:
+        raise _Stop(AnalysisStatus.INCONCLUSIVE, "RESET_AT_EDGE", f"{message}: {error}") from error
 
 
 def _walk(run: _Run) -> ComparisonResult:
@@ -170,7 +260,7 @@ def _walk(run: _Run) -> ComparisonResult:
         by_epoch[record.epoch].append(record)
     final_epoch = len(by_epoch) - 1
 
-    edges, cut_by_gap = _clock_edges(run)
+    edges, cut = _clock_edges(run)
     active = header.reset_active
     seen_active = False
     in_epoch = False
@@ -180,9 +270,13 @@ def _walk(run: _Run) -> ComparisonResult:
     final_done = False  # the final golden epoch needs nothing more
 
     for time_ps in edges:
+        run.reached = time_ps
         reset_before = provider.get_value_at(header.reset, time_ps, phase=_BEFORE).bits
         if reset_before == active:
-            seen_active = True
+            if not seen_active:
+                seen_active = True
+                run.active_from = time_ps
+            _require_stable_reset(run, time_ps, reset_before)
             if in_epoch:
                 _close_epoch(run, epoch, cycle, consumed, by_epoch)
                 final_done = final_done or epoch >= final_epoch
@@ -198,12 +292,7 @@ def _walk(run: _Run) -> ComparisonResult:
             continue
         if not seen_active:
             continue
-        if provider.get_value_at(header.reset, time_ps, phase=_SETTLED).bits != reset_before:
-            raise _Stop(
-                AnalysisStatus.INCONCLUSIVE,
-                "RESET_AT_EDGE",
-                f"reset {header.reset} changes at the clock edge at {time_ps} ps",
-            )
+        _require_stable_reset(run, time_ps, reset_before)
         if in_epoch:
             cycle += 1
         else:
@@ -225,7 +314,8 @@ def _walk(run: _Run) -> ComparisonResult:
             if epoch == final_epoch and cycle == len(records) - 1:
                 return run.result(AnalysisStatus.PASS)
 
-    return _finish(run, seen_active, epoch, final_epoch, final_done, cut_by_gap)
+    run.reached = None
+    return _finish(run, seen_active, epoch, final_epoch, final_done, cut)
 
 
 def _close_epoch(
@@ -254,28 +344,34 @@ def _close_epoch(
 
 
 def _finish(
-    run: _Run, seen_active: bool, epoch: int, final_epoch: int, final_done: bool, cut_by_gap: bool
+    run: _Run, seen_active: bool, epoch: int, final_epoch: int, final_done: bool, cut: _Cut | None
 ) -> ComparisonResult:
+    if cut is not None and cut.code == "CLOCK_INDETERMINATE":
+        what = f"an ambiguous clock ({cut.detail})"
+    else:
+        what = "a dump gap"
     if not seen_active:
+        if cut is not None and cut.code == "CLOCK_INDETERMINATE":
+            raise _Stop(AnalysisStatus.INCONCLUSIVE, cut.code, cut.detail)
         raise _Stop(
             AnalysisStatus.UNSUPPORTED,
             "NO_RESET_OBSERVED",
             f"reset {run.golden.header.reset} was never observed active before a clock edge",
         )
     if run.mode is ComparisonMode.HANDSHAKE and final_done and epoch >= final_epoch:
-        if cut_by_gap:
+        if cut is not None:
             raise _Stop(
                 AnalysisStatus.INCONCLUSIVE,
-                "TRACE_GAP",
-                "every expected transaction matched, but a dump gap prevents ruling out "
+                cut.code,
+                f"every expected transaction matched, but {what} prevents ruling out "
                 "extra transactions afterwards",
             )
         return run.result(AnalysisStatus.PASS)
-    if cut_by_gap:
+    if cut is not None:
         raise _Stop(
             AnalysisStatus.INCONCLUSIVE,
-            "TRACE_GAP",
-            "a dump gap interrupts the trace before every expectation was observed",
+            cut.code,
+            f"{what} interrupts the trace before every expectation was observed",
         )
     raise _Stop(
         AnalysisStatus.INCONCLUSIVE,
