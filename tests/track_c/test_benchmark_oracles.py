@@ -389,3 +389,89 @@ def test_nothing_compared_is_inconclusive() -> None:
     result = _pass_or_nothing(ComparisonMode.CYCLE, 0)
     assert result.status is AnalysisStatus.INCONCLUSIVE
     assert result.diagnostics[0].code == "NOTHING_COMPARED"
+
+
+# ----------------------------------------------------------------------
+# Reset handling is time-ordered (Track A audit on PR #5)
+# ----------------------------------------------------------------------
+
+_BASE = {"type": "metadata", "schema_version": 1, "clock": "tb.dut.clk",
+         "reset": "tb.dut.rst_n", "reset_active": "0"}
+
+
+def _golden(header: dict[str, object], records: list[dict[str, object]]):
+    lines = [json.dumps({**_BASE, **header})] + [json.dumps({"type": "expected", **r}) for r in records]
+    return parse_golden_jsonl("\n".join(lines) + "\n")
+
+
+def _e(t: int, **pre: str) -> ObservedEdge:
+    return ObservedEdge(time_ps=t, pre=pre, settled=pre)
+
+
+def _cycle(expected_q: str):
+    return _golden({"mode": "cycle", "sampling": "settled",
+                    "signals": [{"name": "q", "path": "tb.dut.q", "width": 1}]},
+                   [{"epoch": 0, "cycle_index": 0, "values": {"q": expected_q}}])
+
+
+def _hs(records: list[dict[str, object]]):
+    return _golden({"mode": "handshake", "sampling": "before", "valid": "tb.dut.v", "ready": "tb.dut.r",
+                    "signals": [{"name": "d", "path": "tb.dut.d", "width": 8}]}, records)
+
+
+_CLEAN = [_e(5, rst_n="0", q="0"), _e(15, rst_n="1", q="0")]
+
+
+@pytest.mark.parametrize("unknown", ["x", "z"])
+def test_later_unknown_reset_keeps_an_earlier_failure(unknown: str) -> None:
+    result = benchlib.check_cycle(_cycle("1"), [*_CLEAN, _e(25, rst_n=unknown, q="0")])
+    assert result.status is AnalysisStatus.FAIL
+    assert result.failure is not None and result.failure.observation.time_ps == 15
+
+
+@pytest.mark.parametrize("unknown", ["x", "z"])
+def test_later_unknown_reset_keeps_an_earlier_pass(unknown: str) -> None:
+    result = benchlib.check_cycle(_cycle("0"), [*_CLEAN, _e(25, rst_n=unknown, q="0")])
+    assert result.status is AnalysisStatus.PASS
+
+
+def test_unknown_reset_before_the_expected_cycle_is_inconclusive() -> None:
+    golden = _golden({"mode": "cycle", "sampling": "settled",
+                      "signals": [{"name": "q", "path": "tb.dut.q", "width": 1}]},
+                     [{"epoch": 0, "cycle_index": 0, "values": {"q": "0"}},
+                      {"epoch": 0, "cycle_index": 1, "values": {"q": "0"}}])
+    result = benchlib.check_cycle(golden, [*_CLEAN, _e(25, rst_n="x", q="0"), _e(35, rst_n="1", q="0")])
+    assert result.status is AnalysisStatus.INCONCLUSIVE
+    assert [d.code for d in result.diagnostics] == ["RESET_UNKNOWN"]
+
+
+def test_unknown_reset_before_first_assertion_is_ignored() -> None:
+    result = benchlib.check_cycle(_cycle("0"), [_e(1, rst_n="x", q="x"), *_CLEAN])
+    assert result.status is AnalysisStatus.PASS
+
+
+def test_unknown_reset_with_a_transaction_outstanding_is_inconclusive() -> None:
+    golden = _hs([{"epoch": 0, "transaction_index": 0, "values": {"d": "00000001"}}])
+    edges = [_e(5, rst_n="0", v="0", r="1", d="00000000"), _e(15, rst_n="1", v="0", r="1", d="00000000"),
+             _e(25, rst_n="x", v="1", r="1", d="00000001")]
+    result = benchlib.check_handshake(golden, edges)
+    assert result.status is AnalysisStatus.INCONCLUSIVE
+    assert [d.code for d in result.diagnostics] == ["RESET_UNKNOWN"]
+
+
+def test_unknown_reset_after_all_transactions_keeps_the_pass() -> None:
+    golden = _hs([{"epoch": 0, "transaction_index": 0, "values": {"d": "00000001"}}])
+    edges = [_e(5, rst_n="0", v="0", r="1", d="00000000"), _e(15, rst_n="1", v="1", r="1", d="00000001"),
+             _e(25, rst_n="z", v="0", r="1", d="00000000")]
+    assert benchlib.check_handshake(golden, edges).status is AnalysisStatus.PASS
+
+
+def test_reset_dropping_an_earlier_epochs_transaction_is_not_a_pass() -> None:
+    golden = _hs([{"epoch": 0, "transaction_index": 0, "values": {"d": "00000001"}},
+                  {"epoch": 1, "transaction_index": 0, "values": {"d": "00000111"}}])
+    edges = [_e(5, rst_n="0", v="0", r="1", d="00000000"), _e(15, rst_n="1", v="0", r="1", d="00000000"),
+             _e(25, rst_n="0", v="0", r="1", d="00000000"), _e(35, rst_n="1", v="1", r="1", d="00000111"),
+             _e(45, rst_n="1", v="0", r="1", d="00000000")]
+    result = benchlib.check_handshake(golden, edges)
+    assert result.status is AnalysisStatus.INCONCLUSIVE
+    assert [d.code for d in result.diagnostics] == ["EXPECTATIONS_CANCELLED_BY_RESET"]
