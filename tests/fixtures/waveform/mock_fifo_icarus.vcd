@@ -1,0 +1,144 @@
+$date
+	Mon Nov 16 22:56:13 2026
+$end
+$version
+	Icarus Verilog
+$end
+$timescale
+	1ps
+$end
+$scope module tb $end
+$var wire 1 ! out_valid $end
+$var wire 8 " out_data [7:0] $end
+$var wire 1 # in_ready $end
+$var wire 1 $ full $end
+$var wire 1 % empty $end
+$var reg 1 & clk $end
+$var reg 8 ' in_data [7:0] $end
+$var reg 1 ( in_valid $end
+$var reg 1 ) out_ready $end
+$var reg 1 * rst_n $end
+$scope module dut $end
+$var wire 1 & clk $end
+$var wire 1 $ full $end
+$var wire 8 + in_data [7:0] $end
+$var wire 1 # in_ready $end
+$var wire 1 ( in_valid $end
+$var wire 8 , out_data [7:0] $end
+$var wire 1 ) out_ready $end
+$var wire 1 - pop $end
+$var wire 1 . push $end
+$var wire 1 * rst_n $end
+$var wire 1 ! out_valid $end
+$var wire 1 % empty $end
+$var reg 3 / rptr [2:0] $end
+$var reg 3 0 wptr [2:0] $end
+$upscope $end
+$upscope $end
+$enddefinitions $end
+$comment Show the parameter values. $end
+$dumpall
+$end
+#0
+$dumpvars
+bx 0
+bx /
+0.
+0-
+bx ,
+b0 +
+0*
+0)
+0(
+b0 '
+0&
+x%
+x$
+x#
+bx "
+x!
+$end
+#5000
+1#
+0$
+0!
+1%
+b0 /
+b0 0
+1&
+#10000
+0&
+#15000
+1&
+#20000
+1.
+0&
+b10001 '
+b10001 +
+1(
+1*
+#25000
+1!
+0%
+b1 0
+b10001 "
+b10001 ,
+1&
+#30000
+0&
+b100010 '
+b100010 +
+#35000
+b10 0
+1&
+#40000
+0&
+b110011 '
+b110011 +
+#45000
+b11 0
+1&
+#50000
+0&
+b1000100 '
+b1000100 +
+#55000
+0!
+1%
+b0 0
+1&
+#60000
+0&
+1)
+b1010101 '
+b1010101 +
+#65000
+1-
+1!
+0%
+b1 0
+b1010101 "
+b1010101 ,
+1&
+#70000
+0.
+0&
+0(
+#75000
+b100010 "
+b100010 ,
+0-
+0!
+1%
+b1 /
+1&
+#80000
+0&
+#85000
+1&
+#90000
+0&
+#95000
+1&
+#100000
+0&
