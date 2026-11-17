@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv run pytest*)",
+      "Bash(uv run mypy*)",
+      "Bash(verilator*)",
+      "Bash(git status)",
+      "Bash(git diff*)",
+      "Bash(gh issue*)",
+      "Bash(gh pr*)"
+    ]
+  }
+}
