@@ -21,6 +21,7 @@ the corresponding statuses.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -45,7 +46,8 @@ from src.contracts import (
     WaveformProvider,
     parse_golden_jsonl,
 )
-from src.waveform.parser import InvalidTraceError, UnsupportedTraceError, VcdWaveformProvider
+from src.waveform.fst import ConversionFailedError, ConverterUnavailableError, load_trace
+from src.waveform.parser import InvalidTraceError, UnsupportedTraceError
 
 _BEFORE = SamplingPhase.BEFORE
 _SETTLED = SamplingPhase.SETTLED
@@ -413,16 +415,27 @@ def _file_result(status: AnalysisStatus, mode: ComparisonMode, code: str, messag
 
 
 def compare_files(vcd_path: Path, golden_path: Path) -> ComparisonResult:
-    """Load a VCD and a golden JSONL file and compare them.
+    """Load a ``.vcd`` or ``.fst`` trace and a golden JSONL file and compare them.
 
-    Unreadable files are ``error``; a malformed golden file or VCD is
-    ``invalid_input``; sub-picosecond or unrepresentable traces are
-    ``unsupported``. When the golden file cannot be parsed, the result's
-    ``mode`` is taken from its first line if possible and is otherwise ``cycle``.
+    Unreadable files, a missing FST converter, and a failed conversion are
+    ``error``; a malformed golden file or VCD is ``invalid_input``;
+    sub-picosecond or unrepresentable traces, and trace suffixes other than
+    ``.vcd`` and ``.fst``, are ``unsupported``. When the golden file cannot be
+    parsed, the result's ``mode`` is taken from its first line if possible and
+    is otherwise ``cycle``.
     """
+    return _compare_with_loader(vcd_path, golden_path, lambda: load_trace(vcd_path))
+
+
+def _compare_with_loader(
+    trace_path: Path, golden_path: Path, load: Callable[[], WaveformProvider]
+) -> ComparisonResult:
+    """``compare_files`` with the trace loaded by ``load``; never raises for input problems."""
     try:
         golden_text = golden_path.read_text(encoding="utf-8")
-        vcd_text = vcd_path.read_text(encoding="utf-8")
+        # Checked up front so an unreadable trace is reported before golden content.
+        with trace_path.open("rb"):
+            pass
     except (OSError, UnicodeDecodeError) as error:
         return _file_result(AnalysisStatus.ERROR, ComparisonMode.CYCLE, "FILE_UNREADABLE", str(error))
     try:
@@ -431,9 +444,15 @@ def compare_files(vcd_path: Path, golden_path: Path) -> ComparisonResult:
         return _file_result(AnalysisStatus.INVALID_INPUT, _mode_hint(golden_text), "GOLDEN_INVALID", str(error))
     mode = golden.header.mode
     try:
-        provider = VcdWaveformProvider.from_text(vcd_text)
+        provider = load()
+    except (OSError, UnicodeDecodeError) as error:
+        return _file_result(AnalysisStatus.ERROR, mode, "FILE_UNREADABLE", str(error))
     except InvalidTraceError as error:
         return _file_result(AnalysisStatus.INVALID_INPUT, mode, "TRACE_INVALID", str(error))
     except (UnsupportedPrecisionError, UnsupportedTraceError) as error:
         return _file_result(AnalysisStatus.UNSUPPORTED, mode, "TRACE_UNSUPPORTED", str(error))
+    except ConverterUnavailableError as error:
+        return _file_result(AnalysisStatus.ERROR, mode, "CONVERTER_UNAVAILABLE", str(error))
+    except ConversionFailedError as error:
+        return _file_result(AnalysisStatus.ERROR, mode, "CONVERSION_FAILED", str(error))
     return compare(provider, golden)
