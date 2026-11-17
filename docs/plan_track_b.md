@@ -88,11 +88,35 @@ The task statement asked for ranking of leaf nodes. Leaves of a complete slice
 are only module inputs and reset-boundary state, so ranking leaves alone could
 never name a faulty assignment. Every reached node is therefore a candidate,
 candidates collapse to one per source location, and the order is: RTL
-statements before slice ends; fewer storage boundaries from the failure;
-state-changing register write, then combinational logic, then a write that
-changed nothing, then a hold; fewer hops; then signal path. See
-`_Slicer._rank`. The rank is ordinal. Do not add scores or probabilities to
-the contract.
+statements that compute a value, then statements that only forward one (the
+right-hand side is a signal, a constant or run-time select of it, or one
+element of an unpacked array), then slice ends;
+fewer storage boundaries from the failure; state-changing register write or
+unreset register, then combinational logic, then a write that changed
+nothing, then a hold; fewer hops; a node reached through a control edge before
+one reached through data; then signal path. See `_Slicer._rank`. The rank is
+ordinal. Do not add scores or probabilities to the contract.
+
+The forwarding tier and the unreset rule came from the end-to-end run on the
+four benchmarks (review of PR #6). In case 03 two register copies outranked
+the line that computed the wrong value. In case 04 a register that the reset
+branch never assigns was located at its declaration. When `SliceOptions`
+names the reset, such a register is now located at the reset branch: the
+condition line through the branch's last assignment. Nothing is detected by
+name, so without `reset_path` and `reset_active` the value stays an epoch
+boundary. Track C must pass both from the manifest.
+
+### 1.3 What the slicer refuses to guess
+
+- A guard that reads a signal the trace cannot supply is unknown, even under
+  `===` or a two-state cast that would turn a fabricated `x` into a known
+  value. A recorded `x` is still evaluated.
+- A value read before the last blocking write to it in the same combinational
+  process is not the traced value. Such reads prune nothing, are not followed,
+  and set `truncated` (`INTERMEDIATE_VALUE`). B-06 is the real fix.
+- A process with an intra-assignment delay (`q <= #1 d`) is an unsupported
+  driver; the slice stops there.
+- `max_cycles_back` bounds the hold scan as well as the slice.
 
 ## 2. Rules for every ticket
 

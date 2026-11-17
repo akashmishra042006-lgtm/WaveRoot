@@ -226,6 +226,7 @@ def _encode_one(value: object) -> object:
 _ENCODERS: Final[Mapping[str, _Encoder]] = MappingProxyType(
     {
         "int": _encode_plain,
+        "bool": _encode_plain,
         "str": _encode_plain,
         "expr": _encode_one,
         "exprs": _encode_exprs,
@@ -273,6 +274,10 @@ def _decode_str(value: object, where: str) -> object:
     return _str(value, where)
 
 
+def _decode_bool(value: object, where: str) -> object:
+    return _bool(value, where)
+
+
 def _decode_one(value: object, where: str) -> object:
     return _decode_expr(value, where)
 
@@ -296,6 +301,7 @@ def _decode_mode(value: object, where: str) -> object:
 _DECODERS: Final[Mapping[str, _Decoder]] = MappingProxyType(
     {
         "int": _decode_int,
+        "bool": _decode_bool,
         "str": _decode_str,
         "expr": _decode_one,
         "exprs": _decode_exprs,
@@ -341,7 +347,7 @@ EXPR_CODECS: Final[Mapping[type[ir.Expr], tuple[str, tuple[tuple[str, str], ...]
             ),
             ir.Concat: ("concat", (("parts", "exprs"),)),
             ir.Replicate: ("replicate", (("count", "int"), ("operand", "expr"))),
-            ir.Convert: ("convert", (("operand", "expr"),)),
+            ir.Convert: ("convert", (("operand", "expr"), ("two_state", "bool"))),
             ir.Unsupported: ("unsupported", (("what", "str"), ("operands", "exprs"))),
         }
     )
@@ -478,7 +484,10 @@ def _decode_assign(value: object, where: str) -> GuardedAssign:
 
 
 _DRIVER_FIELDS: Final = frozenset(
-    {"target", "edge_type", "process", "clock", "assigns", "span", "unsupported", "caveats"}
+    {
+        "target", "edge_type", "process", "clock", "assigns", "span", "unsupported", "caveats",
+        "intermediate",
+    }  # fmt: skip
 )
 
 
@@ -493,6 +502,7 @@ def _encode_driver(driver: Driver) -> dict[str, object]:
         "span": _encode_span(driver.span),
         "unsupported": driver.unsupported,
         "caveats": list(driver.caveats),
+        "intermediate": list(driver.intermediate),
     }
 
 
@@ -515,6 +525,7 @@ def _decode_driver(value: object) -> Driver:
         span=_decode_span(data["span"], where),
         unsupported=None if unsupported is None else _str(unsupported, where),
         caveats=tuple(_str(item, where) for item in _list(data["caveats"], where)),
+        intermediate=tuple(_str(item, where) for item in _list(data["intermediate"], where)),
     )
 
 

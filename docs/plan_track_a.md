@@ -200,8 +200,10 @@ implements the rulings:
   except at the coverage start or where dumping resumes.
 - **Also decided:** timestamps are bounded by `MAX_TIME_PS` (decision 8), and an
   x/z clock transition after reset makes the comparison `inconclusive`
-  (decision 9). Decision 11 (the VCD end-of-trace rule) was proposed pending a
-  check of real simulator output; Track A does not implement it yet.
+  (decision 9). Decision 11 (the VCD end-of-trace rule) was verified against
+  real Icarus and Verilator output and is implemented: coverage ends 1 ps
+  before the final timestamp, whose records are not exposed, and a VCD must end
+  with a newline and contain at least two distinct timestamps.
 
 The original notes follow for the record.
 
