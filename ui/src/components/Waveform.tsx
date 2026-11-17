@@ -44,7 +44,7 @@ export function Waveform({ doc, sel, dispatch }: { doc: Loaded; sel: Selection; 
         <p className="empty" data-testid="waveform-none">
           This report has no waveform window.
           {doc.comparisonKind === "benchmark_self_check" &&
-            " The comparison used the benchmark self-check; waveform data arrives with Track A's provider."}
+            " The comparison used the benchmark self-check, which reads testbench samples rather than the trace."}
         </p>
       </Panel>
     );

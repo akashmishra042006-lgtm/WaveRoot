@@ -77,6 +77,7 @@ _RUN_STATUS_MAP: Final[Mapping[RunStatus, AnalysisStatus]] = {
 }
 
 _GOLDEN_MODULE: Final = re.compile(r"^benchmarks\.case_[a-z0-9_]+\.golden_model$")
+_ADAPTER_KINDS: Final = frozenset({"analysis", "benchmark_self_check", "synthetic_fixture"})
 _NAME: Final = re.compile(r"^[a-z0-9_]{1,64}$")
 
 
@@ -323,6 +324,11 @@ class AnalysisService:
                 (run.run_dir / f"golden_{mode.value}.jsonl").write_text(golden.to_jsonl())
 
         for mode, golden in goldens.items():
+            # The comparison step itself is not interruptible; a cancel takes
+            # effect before the next mode and before any verdict is reported.
+            if cancel is not None and cancel.is_set():
+                outcome.comparisons.clear()
+                return stop(AnalysisStatus.ERROR, "CANCELLED", "cancelled during comparison")
             try:
                 outcome.comparisons[mode] = self.comparison.compare(golden, run)
             except ObservedFormatError as exc:
@@ -332,6 +338,9 @@ class AnalysisService:
                 outcome.comparisons.clear()
                 return stop(AnalysisStatus.ERROR, "COMPARISON_FAILED", str(exc))
 
+        if cancel is not None and cancel.is_set():
+            outcome.comparisons.clear()
+            return stop(AnalysisStatus.ERROR, "CANCELLED", "cancelled during comparison")
         outcome.status = self._combine(outcome)
         primary_failure = self._first_failure(outcome)
         if primary_failure is not None:
@@ -424,6 +433,12 @@ def load_report(path: Path) -> dict[str, object]:
     causal = data.get("causal")
     if causal is not None:
         CausalReport.model_validate_json(json.dumps(causal))
+    for key in ("comparison_adapter", "causal_adapter"):
+        adapter = data.get(key)
+        if adapter is None and key == "causal_adapter":
+            continue
+        if not isinstance(adapter, dict) or adapter.get("kind") not in _ADAPTER_KINDS:
+            raise ValueError(f"{key}.kind must be one of {sorted(_ADAPTER_KINDS)}")
     if data.get("exit_code") != EXIT_CODES[status]:
         raise ValueError("exit_code does not match status")
     return data

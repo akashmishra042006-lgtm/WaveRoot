@@ -7,9 +7,9 @@
 
 Exit codes follow spec.md section 8.4: 0 pass, 1 fail, 2 invalid_input or
 error, 3 unsupported or inconclusive. Ctrl-C cancels a running simulation and
-reaps its process group; Track A's comparison step does not poll for
-cancellation, so Ctrl-C takes effect after it (bounded by --fst-timeout for
-FST traces).
+reaps its process group. A comparison step already in progress finishes first;
+the cancel then stops the run as ``error``/``CANCELLED`` before any verdict.
+``--timeout`` covers the simulation, not the comparison.
 
 ``analyze`` compares with Track A's waveform engine by default
 (``--comparison track-a``); ``--comparison self-check`` uses the labeled
@@ -69,12 +69,16 @@ def _parser() -> argparse.ArgumentParser:
     # here because it requires --trace/--golden, which analyze produces itself.
     analyze.add_argument("--keep", action="append", default=None, metavar="PATTERN",
                          help="index only signals whose hierarchical path matches PATTERN "
-                              "(* within a component, ** across components, ? one character); repeatable")
+                              "(* within a component, ** across components, ? one character); repeatable. "
+                              "Patterns match the trace's own paths (Verilator adds TOP., e.g. 'TOP.tb.**'); "
+                              "excluding a compared signal is invalid_input, never a pass")
     analyze.add_argument("--cache-dir", type=Path, default=None, metavar="PATH",
                          help=f"reuse parsed traces cached in PATH (for example {DEFAULT_CACHE_DIR}/); off by default")
-    analyze.add_argument("--fst-timeout", dest="fst_timeout_s", type=_seconds, default=DEFAULT_FST_TIMEOUT_S,
+    analyze.add_argument("--fst-timeout", dest="fst_timeout_s", type=_seconds, default=None,
                          metavar="SECONDS",
-                         help=f"time limit for converting an FST trace with fst2vcd (default {DEFAULT_FST_TIMEOUT_S:g})")
+                         help="time limit for converting an FST trace with fst2vcd "
+                              f"(default {DEFAULT_FST_TIMEOUT_S:g}); benchmark runs write VCD, so it "
+                              "applies only to FST traces")
     analyze.add_argument("--json", action="store_true", help="print the run record as JSON")
 
     compare = sub.add_parser("compare", help="compare a saved trace with a golden using Track A's engine")
@@ -183,12 +187,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     comparison: ComparisonAdapter
     if args.comparison == "track-a":
         comparison = WaveformComparison(
-            keep=tuple(args.keep or ()), cache_dir=args.cache_dir, fst_timeout_s=args.fst_timeout_s
+            keep=tuple(args.keep or ()), cache_dir=args.cache_dir,
+            fst_timeout_s=DEFAULT_FST_TIMEOUT_S if args.fst_timeout_s is None else args.fst_timeout_s,
         )
     else:
         ignored = [flag for flag, value, default in (
             ("--keep", args.keep, None), ("--cache-dir", args.cache_dir, None),
-            ("--fst-timeout", args.fst_timeout_s, DEFAULT_FST_TIMEOUT_S),
+            ("--fst-timeout", args.fst_timeout_s, None),
         ) if value != default]
         if ignored:
             parser.error(f"{', '.join(ignored)} apply only to --comparison track-a")

@@ -147,3 +147,14 @@ describe("selection rules", () => {
     expect(sel.selectedSignalId).toBe("tb.dut.full");
   });
 });
+
+describe("run record adapter kinds", () => {
+  it("rejects an unknown comparison kind instead of showing it unlabeled", async () => {
+    const { loadDocument } = await import("../model/validate");
+    const { SAMPLES } = await import("../samples");
+    const real = structuredClone(SAMPLES.find((x) => x.id === "real-fifo-fail")!.document) as Record<string, any>;
+    expect(() => loadDocument(real)).not.toThrow();
+    real.comparison_adapter.kind = "made_up";
+    expect(() => loadDocument(real)).toThrow(/comparison_adapter.kind/);
+  });
+});

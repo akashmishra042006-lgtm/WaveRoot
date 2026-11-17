@@ -140,7 +140,8 @@ http only). Tests: `tests/track_c/test_api.py`, `ui/src/test/api.test.tsx`, and
 `ui/scripts/live_check.py` (real Chrome + real server + real Verilator,
 including a UI cancel; runs in CI's simulators job).
 
-Limits to know: no authentication (any local program can use the API; the
+Default origins: only the server's own; `serve --dev` adds Vite dev/preview,
+`--allow-origin` adds others. Limits to know: no authentication (any local program can use the API; the
 guards stop web pages and other hosts); one job at a time by default; job
 records live in memory and are lost on restart (run directories on disk
 remain); the UI serves no built bundle itself (use `vite preview` or `dev`,
@@ -149,6 +150,11 @@ whose origins are allowed by default). A real run today has no causal report
 lands; the source endpoint is covered by tests with the mock causal report.
 
 ## Open questions
+
+- Dev 1 / Track B: what is `SourceFile.path` relative to? spec 12 says only
+  "relative". The API resolves it against the case directory; the shared mock
+  fixture uses a repo-root path (`tests/fixtures/mock_fifo_wrap.sv`). Needs a
+  spec decision before Track B's real reports reach the API (C04 part 2).
 
 - Dev 1: spec §8.1 forbids epochs without golden records, so handshake
   schedules need ≥1 transfer per epoch (`build_goldens` enforces this).
