@@ -1,0 +1,90 @@
+{
+  "record": "waveroot-track-c-run",
+  "record_version": 1,
+  "status": "pass",
+  "exit_code": 0,
+  "case_id": "case_01_fifo_wrap",
+  "variant": "correct",
+  "schedule": "directed",
+  "fixture_mode": false,
+  "comparison_adapter": {
+    "name": "track_c_selfcheck",
+    "kind": "benchmark_self_check"
+  },
+  "causal_adapter": null,
+  "primary_mode": "cycle",
+  "comparisons": {
+    "cycle": {
+      "schema_version": 1,
+      "status": "pass",
+      "mode": "cycle",
+      "failure": null,
+      "additional_mismatches": [],
+      "compared_values": 59,
+      "diagnostics": []
+    },
+    "handshake": {
+      "schema_version": 1,
+      "status": "pass",
+      "mode": "handshake",
+      "failure": null,
+      "additional_mismatches": [],
+      "compared_values": 5,
+      "diagnostics": []
+    }
+  },
+  "causal": null,
+  "diagnostics": [],
+  "run": {
+    "status": "ok",
+    "message": "build and simulation completed",
+    "simulator": "verilator",
+    "tool_version": "Verilator 5.020 2024-01-01 rev (Debian 5.020-1)",
+    "run_dir": "artifacts/case_01_fifo_wrap-correct-directed-451e5dc08833",
+    "steps": [
+      {
+        "name": "build",
+        "argv": [
+          "/usr/bin/verilator",
+          "--binary",
+          "--timing",
+          "--trace",
+          "--top-module",
+          "tb",
+          "--Mdir",
+          "artifacts/case_01_fifo_wrap-correct-directed-451e5dc08833/obj",
+          "benchmarks/case_01_fifo_wrap/tb/tb.sv",
+          "benchmarks/case_01_fifo_wrap/rtl/correct/fifo.sv"
+        ],
+        "exit_code": 0,
+        "duration_s": 6.671,
+        "log": "build.log",
+        "log_bytes_total": 3288,
+        "log_truncated": false
+      },
+      {
+        "name": "simulate",
+        "argv": [
+          "artifacts/case_01_fifo_wrap-correct-directed-451e5dc08833/obj/Vtb",
+          "+stim=benchmarks/case_01_fifo_wrap/stim/directed.stim",
+          "+obs=artifacts/case_01_fifo_wrap-correct-directed-451e5dc08833/observed.jsonl",
+          "+vcd=artifacts/case_01_fifo_wrap-correct-directed-451e5dc08833/trace.vcd",
+          "+cycle_limit=64"
+        ],
+        "exit_code": 0,
+        "duration_s": 0.051,
+        "log": "simulate.log",
+        "log_bytes_total": 83,
+        "log_truncated": false
+      }
+    ],
+    "inputs_sha256": {
+      "rtl/correct/fifo.sv": "25c6493f97d3b5f5ccf2b272698845f336dd7327e4b97f507677c406a01350ee",
+      "stim/directed.stim": "9e7e55d60262d1a2b7b953a1b5f54753ffe736de169386425d3aa8c8ec270692",
+      "tb/tb.sv": "ff8d5926ee0f8f07659296ab0de39d77485b3f28248c8971d9d05aee4979f630"
+    },
+    "trace": "trace.vcd",
+    "trace_sha256": "99bbe0ba051b36d8220da6de37b0df6aaee9113427f1510943a9efd646c624be",
+    "trace_scope_prefix": "TOP."
+  }
+}

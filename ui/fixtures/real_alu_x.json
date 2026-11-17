@@ -1,0 +1,106 @@
+{
+  "record": "waveroot-track-c-run",
+  "record_version": 1,
+  "status": "fail",
+  "exit_code": 1,
+  "case_id": "case_04_alu_xprop",
+  "variant": "mutant",
+  "schedule": "directed",
+  "fixture_mode": false,
+  "comparison_adapter": {
+    "name": "track_c_selfcheck",
+    "kind": "benchmark_self_check"
+  },
+  "causal_adapter": null,
+  "primary_mode": "cycle",
+  "comparisons": {
+    "cycle": {
+      "schema_version": 1,
+      "status": "fail",
+      "mode": "cycle",
+      "failure": {
+        "kind": "unknown_value",
+        "mode": "cycle",
+        "signal_path": "tb.dut.out_data",
+        "clock_path": "tb.dut.clk",
+        "observation": {
+          "epoch": 0,
+          "cycle": 0,
+          "phase": "settled",
+          "time_ps": "25000"
+        },
+        "transaction_index": null,
+        "expected": {
+          "width": 8,
+          "bits": "00000000"
+        },
+        "actual": {
+          "width": 8,
+          "bits": "xxxxxxxx"
+        },
+        "detail": "out_data expected 00000000 actual xxxxxxxx"
+      },
+      "additional_mismatches": [],
+      "compared_values": 2,
+      "diagnostics": []
+    }
+  },
+  "causal": null,
+  "diagnostics": [
+    {
+      "code": "CAUSAL_UNAVAILABLE",
+      "message": "no causal-analysis adapter is configured; the failure is unlocalized"
+    }
+  ],
+  "run": {
+    "status": "ok",
+    "message": "build and simulation completed",
+    "simulator": "icarus",
+    "tool_version": "Icarus Verilog version 12.0 (stable) ()",
+    "run_dir": "artifacts/case_04_alu_xprop-mutant-directed-97a3c259fe80",
+    "steps": [
+      {
+        "name": "build",
+        "argv": [
+          "/usr/bin/iverilog",
+          "-g2012",
+          "-s",
+          "tb",
+          "-o",
+          "artifacts/case_04_alu_xprop-mutant-directed-97a3c259fe80/sim.vvp",
+          "benchmarks/case_04_alu_xprop/tb/tb.sv",
+          "benchmarks/case_04_alu_xprop/rtl/mutant/alu.sv"
+        ],
+        "exit_code": 0,
+        "duration_s": 0.052,
+        "log": "build.log",
+        "log_bytes_total": 0,
+        "log_truncated": false
+      },
+      {
+        "name": "simulate",
+        "argv": [
+          "/usr/bin/vvp",
+          "artifacts/case_04_alu_xprop-mutant-directed-97a3c259fe80/sim.vvp",
+          "+stim=benchmarks/case_04_alu_xprop/stim/directed.stim",
+          "+obs=artifacts/case_04_alu_xprop-mutant-directed-97a3c259fe80/observed.jsonl",
+          "+vcd=artifacts/case_04_alu_xprop-mutant-directed-97a3c259fe80/trace.vcd",
+          "+cycle_limit=64"
+        ],
+        "exit_code": 0,
+        "duration_s": 0.051,
+        "log": "simulate.log",
+        "log_bytes_total": 208,
+        "log_truncated": false
+      }
+    ],
+    "inputs_sha256": {
+      "rtl/mutant/alu.sv": "6d0f47fdbf9b4a1dd5f5988fa4138706ac985217be2fffaa080651eec94fdb8b",
+      "stim/directed.stim": "fc3430a09b6f32fd9f1290288a0b3f8271e0203cd568884cad62c587d6df2f07",
+      "tb/tb.sv": "9d305ef5680b9ebc6ffc05a52b630ab4761086e987eb3d7b819141b2171badc5"
+    },
+    "trace": "trace.vcd",
+    "trace_sha256": "cc6bfe829825145baeb987ea4d7db7713275fa4c1b336e772f06397bba1c70a0",
+    "trace_scope_prefix": ""
+  }
+}

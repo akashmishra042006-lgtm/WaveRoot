@@ -1,19 +1,36 @@
 # Track C handoff — current state
 
-Date: November 16, 2026. Latest role: Opus platform role (ticket C03).
-Branch: `feat/track-c-platform`, stacked on `feat/track-c-benchmarks`
-(PR #5, C01+C02), based on `main` at `b5d096d`. Not merged.
+Date: November 16, 2026. Latest work: ticket C05 (interface), done in the
+Opus session (the plan's "Astra" role is not a selectable model).
+Branch: `feat/track-c-ui`, stacked on `feat/track-c-platform` (PR #10, C03),
+which is stacked on `feat/track-c-benchmarks` (PR #5, C01+C02). Not merged.
 
-## Team state at handoff
+## Team state at handoff (Nov 16, late)
 
-- Track A: PR #4 was merged, then **reverted** (PR #7) pending contract rulings
-  on spec sections 4, 6.1, 7, 9. `main` has no Track A code. It returns in a new
-  rebased PR.
-- Track B: PR #6 open (`feat/track-b-causal`), not merged.
-- Contracts: PR #8 open (`contracts/rulings-a-d`). VCD-tail evidence for its
-  decision 11 was posted on the PR.
-- Conflict check (Nov 16): #5, #6, #8 touch disjoint files; pairwise and
-  combined merges are clean; `main + #5 + #8` passes the fast suite and mypy.
+- `main` now has the contract rulings (#8) and **Track A re-landed (#9)**.
+  #11/#12 (decision 11 firm, stacked) are open. Track B (#6) is open.
+- All three Track C branches have current `main` merged in; the stack is
+  #5 → #10 → #13.
+
+## Review of #5, #10, #13 (Nov 16)
+
+Same-session review (not independent; a cold review in a fresh session is
+still recommended). Findings, all fixed on the PR they belong to:
+
+1. High (#5): golden paths ignored Verilator's `TOP.` scope, so Track A
+   reported SIGNAL_NOT_FOUND on 3 of 4 benchmarks and anchors did not
+   resolve in the trace (spec 3.1, 5.1). Fix: `rebase_golden` onto the
+   detected prefix. New `TestTrackAAgreement`: Track A's real engine and the
+   self-check agree on every case, schedule, variant, and mode (16 tests).
+2. Medium (#10): runner reaped the simulator before the final group kill, so
+   a reused group ID could in principle receive SIGKILL. Fix: observe exit
+   with waitid(WNOWAIT), kill the group while the leader is unreaped.
+3. Medium (#10): the service compared and anchored unmapped paths; the mock
+   fixture's causal report only "matched" a Verilator run because both lacked
+   the prefix. Fix: runner records `trace_scope_prefix`; service rebases.
+   That fixture is now correctly refused for Verilator runs.
+4. Low (#13): UI validator lacked anchor-value, failure-mode,
+   additional-mismatch, edge-rule, and edge-time checks. Added, with tests.
 
 ## C03 — completed
 
@@ -58,14 +75,51 @@ Manifests gained a `golden` block (module, modes, primary mode).
   are tested against real hanging `vvp` processes, with a guard test proving
   the process probe sees full command lines (`ps -eww`).
 
-## C04 — blocked, not complete
+## C05 — fixture-and-real-record milestone (not full integration)
 
-Requires real Track A and Track B modules on `main`; neither is present. The
-service is ready for them: implement `ComparisonAdapter` over Track A's
-provider/diff engine and `CausalAdapter` over Track B's slicer, using only
-`src/contracts.py` types, then run case_01 mutant/directed through both. The
-benchmark self-check is labeled `benchmark_self_check` and must not be
-reported as Track A coverage.
+`ui/`: React + TypeScript (Vite), Vitest + Testing Library. See `ui/README.md`.
+
+- Reads CLI run records, mock fixtures, and bare `CausalReport`s; validates
+  schema 1 before rendering (unknown fields, widths, dangling references,
+  ranks, schema version).
+- Panels: header with real/sample labeling, first-failure strip with
+  jump-to-failure, ranked suspects, time-unrolled SVG graph with a keyboard
+  node list and pruned toggle, BigInt waveform with separate failure and
+  selection cursors, SHA-256-checked source viewer, assertion candidates.
+  Tabs below 700 px with shared selection; polite live announcements.
+- Designed states: empty, loading, pass, fail localized, fail unlocalized,
+  inconclusive/unsupported, infrastructure error (real TIMEOUT record),
+  validation error, missing source, revision mismatch, missing waveform
+  signal, unknown values, empty and oversized graphs.
+- Fixtures in `ui/fixtures/` are generated through `src/contracts.py`; five are
+  real CLI run records (Verilator FIFO pass/fail, Icarus X, real timeout).
+
+Evidence:
+- `npm --prefix ui test` → 47 passed (acceptance scenarios 1–8 plus model
+  unit tests). `npm --prefix ui run build` → clean strict typecheck and build.
+- `python3 ui/scripts/visual_check.py` in Chrome 153: 1440/1024/768/375 px
+  have no page-level horizontal overflow and no overlapping controls; the
+  waveform scrolls inside its panel. Screenshots were inspected by eye.
+- Scenario 10, measured on this cloud container (Intel Xeon @ 2.30GHz,
+  headless Chrome 153): 100 signals × 1,000 transitions plus 1,000 nodes →
+  suspect selection 16.6 ms median (17.5 max), cursor step ~16 ms, initial
+  load ~0.4 s. The graph is not drawn above 400 nodes (list only), by design.
+  First measurement was 303 ms; fixed with path-based memoized tracks and a
+  cursor overlay.
+- Fixed during inspection: selecting a suspect scrolled the whole page under
+  the sticky header; source now scrolls inside its own box.
+
+Not done: the offline-API state (C06 has no API yet); causal graphs and
+waveform windows from real engines (Tracks A/B). Fixture-only UI is not full
+integration.
+
+## C04 — partly unblocked
+
+Track A is on `main` and already agrees with the self-check on every real
+benchmark trace. Next: a `ComparisonAdapter` over `src.waveform.compare`
+(kind `analysis`) as the CLI default, and Track A's waveform options wired
+into `cli.py`. The causal half still waits for Track B (#6). The self-check
+stays labeled `benchmark_self_check` and is not Track A coverage.
 
 ## Open questions
 
@@ -77,8 +131,17 @@ reported as Track A coverage.
 - `benchmarks/common/benchlib.run_simulation` still has its own simple runner
   for the benchmark tests; it could delegate to `src.app.runner.Runner`.
 
+## Continuing without a heavy model
+
+`docs/track-c/playbook.md` is the operating manual: the per-ticket loop, the
+gates (now automated in CI, PR #16), rules learned from real defects, and
+file-level specs with acceptance tests for C04 part 1, C04 part 2, C06, and
+C07. All three Track C branches have current `main` merged (decision 11,
+pyslang); the top branch also carries the CI workflow, so #13's checks run
+every gate against the whole stack.
+
 ## Next single ticket
 
-C05 (Astra frontend role, Prompt 3): UI against `ComparisonResult` and
-`CausalReport` using the mock fixture plus real run records from
-`python -m src.app.cli analyze ... --json`. C04 follows when A and B land.
+C04 part 1: the Track A comparison adapter (see above). Independent cold
+review of C03+C05 (Prompt 5) in a fresh session. Then C04 part 2 when Track B
+merges, and C06 (local API).
