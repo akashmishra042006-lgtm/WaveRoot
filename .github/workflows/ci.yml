@@ -1,0 +1,102 @@
+# Verification gates for every pull request and every push to main.
+#
+# These encode the checks that caught real defects during development, so
+# they no longer depend on someone remembering to run them:
+#   - python:     strict mypy and the fast test lane
+#   - simulators: real Verilator / Icarus / GTKWave runs, including the
+#                 Track A <-> benchmark self-check agreement tests
+#   - ui:         behavior tests, strict build, and a Chrome layout check at
+#                 1440/1024/768/375 px (screenshots uploaded as an artifact)
+#
+# Integration tests FAIL rather than skip when a required tool is missing
+# (spec.md section 13), so a green simulators job means the tools really ran.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: Python · mypy + unit tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Install locked dependencies
+        run: uv sync --locked
+      - name: Typecheck (strict)
+        run: uv run mypy src/
+      - name: Unit tests
+        run: uv run pytest -m "not integration" -q
+
+  simulators:
+    name: Simulators · Verilator, Icarus, GTKWave
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Install simulators and FST tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq verilator iverilog gtkwave
+      - name: Record tool versions
+        run: |
+          verilator --version
+          iverilog -V 2>&1 | head -1
+          which vcd2fst fst2vcd
+      - name: Install locked dependencies
+        run: uv sync --locked
+      - name: Integration tests (real simulator runs)
+        run: uv run pytest -m integration -q --durations=10
+
+  ui:
+    name: UI · tests, build, layout check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Detect the frontend
+        id: detect
+        run: |
+          if [ -f ui/package.json ]; then echo "present=true" >> "$GITHUB_OUTPUT"; else echo "present=false" >> "$GITHUB_OUTPUT"; echo "No ui/package.json yet; UI gates skipped."; fi
+      - uses: actions/setup-node@v4
+        if: steps.detect.outputs.present == 'true'
+        with:
+          node-version: 22
+      - uses: astral-sh/setup-uv@v6
+        if: steps.detect.outputs.present == 'true'
+      - name: Install UI dependencies
+        if: steps.detect.outputs.present == 'true'
+        run: npm ci --prefix ui
+      - name: Behavior tests
+        if: steps.detect.outputs.present == 'true'
+        run: npm --prefix ui test
+      - name: Strict typecheck and production build
+        if: steps.detect.outputs.present == 'true'
+        run: npm --prefix ui run build
+      - name: Chrome layout check (1440/1024/768/375 px)
+        if: steps.detect.outputs.present == 'true'
+        # Fails on page-level horizontal overflow, overlapping controls, or
+        # page errors. Latency numbers are printed for information only:
+        # shared runners are too noisy to gate on them.
+        run: uv run --with playwright python ui/scripts/visual_check.py ui-visual
+      - name: Upload screenshots
+        if: always() && steps.detect.outputs.present == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-screenshots
+          path: ui-visual/*.png
+          if-no-files-found: ignore
+          retention-days: 14
