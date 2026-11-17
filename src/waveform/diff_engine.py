@@ -37,6 +37,7 @@ from src.contracts import (
     GoldenSignal,
     GoldenTrace,
     IndeterminateClockError,
+    InvalidQueryError,
     LogicValue,
     Observation,
     OutOfRangeError,
@@ -449,6 +450,9 @@ def _compare_with_loader(
         return _file_result(AnalysisStatus.ERROR, mode, "FILE_UNREADABLE", str(error))
     except InvalidTraceError as error:
         return _file_result(AnalysisStatus.INVALID_INPUT, mode, "TRACE_INVALID", str(error))
+    except InvalidQueryError as error:
+        # Only a signal-selection (keep) pattern can raise this while loading.
+        return _file_result(AnalysisStatus.INVALID_INPUT, mode, "SELECTION_INVALID", str(error))
     except (UnsupportedPrecisionError, UnsupportedTraceError) as error:
         return _file_result(AnalysisStatus.UNSUPPORTED, mode, "TRACE_UNSUPPORTED", str(error))
     except ConverterUnavailableError as error:

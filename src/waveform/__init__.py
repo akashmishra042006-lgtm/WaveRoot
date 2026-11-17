@@ -8,6 +8,13 @@ from src.waveform.fst import (
     convert_fst_to_vcd_text,
     load_trace,
 )
+from src.waveform.options import (
+    WaveformOptions,
+    add_waveform_arguments,
+    exit_code,
+    options_from_namespace,
+    run_comparison,
+)
 from src.waveform.parser import (
     InvalidTraceError,
     ParsedTrace,
@@ -28,12 +35,17 @@ __all__ = [
     "SkippedVariable",
     "UnsupportedTraceError",
     "VcdWaveformProvider",
+    "WaveformOptions",
+    "add_waveform_arguments",
     "cache_key",
     "compare",
     "compare_files",
     "convert_fst_to_vcd_text",
+    "exit_code",
     "load_cached",
     "load_trace",
     "match_paths",
+    "options_from_namespace",
     "parse_vcd",
+    "run_comparison",
 ]
