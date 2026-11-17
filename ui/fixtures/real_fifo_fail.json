@@ -8,8 +8,8 @@
   "schedule": "directed",
   "fixture_mode": false,
   "comparison_adapter": {
-    "name": "track_c_selfcheck",
-    "kind": "benchmark_self_check"
+    "name": "track_a_waveform",
+    "kind": "analysis"
   },
   "causal_adapter": null,
   "primary_mode": "cycle",
@@ -38,7 +38,7 @@
           "width": 1,
           "bits": "0"
         },
-        "detail": "full expected 1 actual 0"
+        "detail": "full: expected 1 but observed 0 at epoch 0 cycle 3 (settled, 55000 ps)"
       },
       "additional_mismatches": [
         {
@@ -61,7 +61,7 @@
             "width": 1,
             "bits": "1"
           },
-          "detail": "empty expected 0 actual 1"
+          "detail": "empty: expected 0 but observed 1 at epoch 0 cycle 3 (settled, 55000 ps)"
         },
         {
           "kind": "value_mismatch",
@@ -83,7 +83,7 @@
             "width": 1,
             "bits": "0"
           },
-          "detail": "out_valid expected 1 actual 0"
+          "detail": "out_valid: expected 1 but observed 0 at epoch 0 cycle 3 (settled, 55000 ps)"
         }
       ],
       "compared_values": 16,
@@ -113,7 +113,7 @@
           "width": 8,
           "bits": "01010101"
         },
-        "detail": "transaction 0 expected 00010001 actual 01010101"
+        "detail": "out_data: expected 00010001 but observed 01010101 at epoch 0 cycle 5 transaction 0 (before, 75000 ps)"
       },
       "additional_mismatches": [],
       "compared_values": 1,
@@ -132,7 +132,7 @@
     "message": "build and simulation completed",
     "simulator": "verilator",
     "tool_version": "Verilator 5.020 2024-01-01 rev (Debian 5.020-1)",
-    "run_dir": "artifacts/case_01_fifo_wrap-mutant-directed-66003ef62773",
+    "run_dir": "artifacts/case_01_fifo_wrap-mutant-directed-dfaf2379c8c5",
     "steps": [
       {
         "name": "build",
@@ -144,12 +144,12 @@
           "--top-module",
           "tb",
           "--Mdir",
-          "artifacts/case_01_fifo_wrap-mutant-directed-66003ef62773/obj",
+          "artifacts/case_01_fifo_wrap-mutant-directed-dfaf2379c8c5/obj",
           "benchmarks/case_01_fifo_wrap/tb/tb.sv",
           "benchmarks/case_01_fifo_wrap/rtl/mutant/fifo.sv"
         ],
         "exit_code": 0,
-        "duration_s": 7.068,
+        "duration_s": 6.177,
         "log": "build.log",
         "log_bytes_total": 3286,
         "log_truncated": false
@@ -157,10 +157,10 @@
       {
         "name": "simulate",
         "argv": [
-          "artifacts/case_01_fifo_wrap-mutant-directed-66003ef62773/obj/Vtb",
+          "artifacts/case_01_fifo_wrap-mutant-directed-dfaf2379c8c5/obj/Vtb",
           "+stim=benchmarks/case_01_fifo_wrap/stim/directed.stim",
-          "+obs=artifacts/case_01_fifo_wrap-mutant-directed-66003ef62773/observed.jsonl",
-          "+vcd=artifacts/case_01_fifo_wrap-mutant-directed-66003ef62773/trace.vcd",
+          "+obs=artifacts/case_01_fifo_wrap-mutant-directed-dfaf2379c8c5/observed.jsonl",
+          "+vcd=artifacts/case_01_fifo_wrap-mutant-directed-dfaf2379c8c5/trace.vcd",
           "+cycle_limit=64"
         ],
         "exit_code": 0,

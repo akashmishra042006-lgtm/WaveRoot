@@ -92,7 +92,7 @@ Each of these was a real defect or near miss. Do not relearn them.
 
 ## 4. Remaining tickets, specified
 
-### C04 part 1: Track A comparison adapter (unblocked now)
+### C04 part 1: Track A comparison adapter (done)
 
 - `src/app/adapters.py`: add `WaveformComparison` with `kind = "analysis"`.
   `compare(golden, run)` writes the (already rebased) golden to
