@@ -223,8 +223,12 @@ Consequences:
   mode, `EXPECTATIONS_CANCELLED_BY_RESET` in handshake mode). The golden model
   must list, per epoch, only expectations it guarantees are observed before the
   reset that ends it. The next inactive edge starts the next epoch at cycle 0.
-- An `x`/`z` reset at a sampling edge, or a reset change at the edge timestamp,
-  makes the comparison `inconclusive`.
+- Once reset has first been observed active, an `x`/`z` reset at a sampling
+  edge, or a reset change at the edge timestamp, makes the comparison
+  `inconclusive`. Before that, `x`/`z` reset values and reset changes at edges
+  are ignored, as for the clock (section 6.1): epoch 0 needs a known active
+  reset followed by a known inactive one, so they cannot move its start, and
+  no value is compared before it.
 - Handshake transactions are indexed from 0 within each epoch. A stall consumes
   no index.
 
@@ -558,6 +562,9 @@ change process in section 2 rather than working around it locally:
     output from Icarus Verilog 13.0 and Verilator 5.054 and 5.020: both end
     files with a newline and write a bare timestamp at `$finish`, so a normal
     `$finish` loses no records.
+12. An `x`/`z` reset, or a reset change at an edge, is ignored until reset has
+    first been observed active, matching the clock rule of decision 9. After
+    that it makes the comparison `inconclusive` (section 7).
 
 ## 16. Mock fixture
 
