@@ -1207,13 +1207,31 @@ def _intermediate_reads(
     Inside one combinational process a blocking assignment takes effect at
     once, so a read placed before the last write to the same signal sees an
     intermediate value. The trace only holds the settled one.
+
+    An assignment reads its operands at its own position. An ``if`` or
+    ``case`` reads its condition before any statement it controls, so a guard
+    is read at the position of the first assignment that carries it; a write
+    inside its own branch therefore comes after the read.
     """
     last_write = {assign.target: position for position, assign in enumerate(ordered)}
     positions = {id(assign): position for position, assign in enumerate(ordered)}
+    evaluated: dict[int, int] = {}
+    for position, assign in enumerate(ordered):
+        for guard in assign.guards:
+            evaluated.setdefault(guard.decision, position)
     found: dict[str, str] = {}
     for assign in group:
-        position = positions[id(assign)]
-        for signal in _assign_signals(assign):
+        reads: list[tuple[str, int]] = [
+            (signal, positions[id(assign)])
+            for operand in (assign.rhs, *assign.index_operands)
+            for signal in ir.signals_of(operand)
+        ]
+        for guard in assign.guards:
+            for operand in ir.guard_operands(guard):
+                reads.extend(
+                    (signal, evaluated[guard.decision]) for signal in ir.signals_of(operand)
+                )
+        for signal, position in reads:
             if signal in written and last_write[signal] >= position:
                 found.setdefault(
                     signal,
@@ -1222,16 +1240,6 @@ def _intermediate_reads(
                     "that the trace does not record",
                 )
     return found
-
-
-def _assign_signals(assign: GuardedAssign) -> tuple[str, ...]:
-    found: dict[str, None] = {}
-    for operand in (assign.rhs, *assign.index_operands):
-        found.update(dict.fromkeys(ir.signals_of(operand)))
-    for guard in assign.guards:
-        for operand in ir.guard_operands(guard):
-            found.update(dict.fromkeys(ir.signals_of(operand)))
-    return tuple(found)
 
 
 def _structural_edges(drivers: Mapping[str, tuple[Driver, ...]]) -> tuple[StructuralEdge, ...]:

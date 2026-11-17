@@ -1844,3 +1844,106 @@ def test_unreset_register_is_located_at_the_reset_branch(tmp_path: Path) -> None
     boundary = next(s for s in plain.suspects if s.node_id == node_of(plain, "sel_q", 0, BEFORE).id)
     assert boundary.location is not None
     assert boundary.location.line == _line_of(ALU_SV, "logic sel_q;")
+
+
+# --------------------------------------------------------------------------
+# Review of PR #6, round 2 (Astra re-audit at 9ed484c)
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "  assign y = ($countones(sel) === 32'd1) ? a : b;\n",
+        "  always_comb begin\n"
+        "    if ($countones(sel) === 32'd1) y = a;\n"
+        "    else y = b;\n"
+        "  end\n",
+    ],
+    ids=["ternary", "if"],
+)
+def test_round2_finding1_unsupported_guard_operand_never_prunes(tmp_path: Path, body: str) -> None:
+    """``$countones`` is not evaluated; its x must not become a known result under ``===``."""
+    design = build(
+        tmp_path,
+        "module m (input logic [3:0] sel, input logic [3:0] a, b, output logic [3:0] y);\n"
+        f"{body}endmodule\n",
+    )
+    report = slice_failure(
+        PICK_FAILURE, static_provider({**PICK_VALUES, "sel": "0001"}), design, OPTIONS
+    )
+    y = ("y", 2, SETTLED)
+    assert branches(edges_of(report, ("a", 2, SETTLED), y)) == {BranchStatus.UNKNOWN}
+    assert branches(edges_of(report, ("b", 2, SETTLED), y)) == {BranchStatus.UNKNOWN}
+    # The unsupported call still keeps its operand as a dependence.
+    assert has_node(report, "sel")
+    assert CausalReport.model_validate_json(report.model_dump_json()) == report
+
+
+def test_round2_finding2_guard_read_before_a_write_in_its_own_branch(tmp_path: Path) -> None:
+    """``if (t)`` reads ``t`` before the ``t = 0`` inside its branch; the trace has t = 0."""
+    design = build(
+        tmp_path,
+        "module m (input logic s, input logic [3:0] a, b, output logic [3:0] y);\n"
+        "  logic t;\n"
+        "  always_comb begin\n"
+        "    t = s;\n"
+        "    if (t) begin\n"
+        "      t = 1'b0;\n"
+        "      y = a;\n"
+        "    end else y = b;\n"
+        "  end\n"
+        "endmodule\n",
+    )
+    assert design.drivers["y"][0].intermediate == ("t",)
+    report = slice_failure(
+        PICK_FAILURE, static_provider({**PICK_VALUES, "s": "1", "t": "0"}), design, OPTIONS
+    )
+    y = ("y", 2, SETTLED)
+    assert branches(edges_of(report, ("a", 2, SETTLED), y)) == {BranchStatus.UNKNOWN}
+    assert branches(edges_of(report, ("b", 2, SETTLED), y)) == {BranchStatus.UNKNOWN}
+    assert report.truncated and "INTERMEDIATE_VALUE" in codes(report)
+
+
+def test_round2_finding2_guard_read_after_the_last_write_is_still_evaluated(
+    tmp_path: Path,
+) -> None:
+    """Control: when the if comes after the last write, the traced t is the value it reads."""
+    design = build(
+        tmp_path,
+        "module m (input logic s, input logic [3:0] a, b, output logic [3:0] y);\n"
+        "  logic t;\n"
+        "  always_comb begin\n"
+        "    t = s;\n"
+        "    if (t) y = a;\n"
+        "    else y = b;\n"
+        "  end\n"
+        "endmodule\n",
+    )
+    assert design.drivers["y"][0].intermediate == ()
+    report = slice_failure(
+        PICK_FAILURE, static_provider({**PICK_VALUES, "s": "1", "t": "1"}), design, OPTIONS
+    )
+    y = ("y", 2, SETTLED)
+    assert branches(edges_of(report, ("a", 2, SETTLED), y)) == {BranchStatus.RETAINED}
+    assert branches(edges_of(report, ("b", 2, SETTLED), y)) == {BranchStatus.PRUNED}
+
+
+def test_round2_finding3_inferred_latch_hold_truncates_the_slice(tmp_path: Path) -> None:
+    """With en = 0 no assignment executes; y keeps an earlier value the slice cannot trace."""
+    design = build(
+        tmp_path,
+        "module m (input logic en, a, output logic y);\n"
+        "  always @* if (en) y = a;\n"
+        "endmodule\n",
+    )
+    report = slice_failure(
+        failure_at("y", 2, 25000, actual="1", expected="0"),
+        static_provider({"en": "0", "a": "0", "y": "1"}),
+        design,
+        OPTIONS,
+    )
+    assert report.truncated and "NO_ACTIVE_ASSIGNMENT" in codes(report)
+    stopped = next(s for s in report.suspects if s.node_id == node_of(report, "y", 2, SETTLED).id)
+    assert "slice stops" in stopped.reason
+    assert CausalReport.model_validate_json(report.model_dump_json()) == report
