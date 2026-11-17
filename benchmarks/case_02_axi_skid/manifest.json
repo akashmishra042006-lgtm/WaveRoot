@@ -86,5 +86,13 @@
     "expected": "1",
     "actual": "0",
     "additional_mismatches": []
+  },
+  "golden": {
+    "module": "benchmarks.case_02_axi_skid.golden_model",
+    "modes": [
+      "cycle",
+      "handshake"
+    ],
+    "primary_mode": "cycle"
   }
 }

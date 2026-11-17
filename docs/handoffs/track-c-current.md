@@ -1,80 +1,84 @@
 # Track C handoff — current state
 
-Date: November 16, 2026. Role: Fable benchmark role (tickets C01 and C02).
-Branch: `feat/track-c-benchmarks`, based on `main` at `b5d096d` (merge of
-`feat/shared-contracts`, PR #3). Not pushed or merged.
+Date: November 16, 2026. Latest role: Opus platform role (ticket C03).
+Branch: `feat/track-c-platform`, stacked on `feat/track-c-benchmarks`
+(PR #5, C01+C02), based on `main` at `b5d096d`. Not merged.
 
-## Scope completed
+## Team state at handoff
 
-C01 and C02: all four benchmark pairs, built against the accepted shared
-contracts (`spec.md` schema 1, `src/contracts.py`). The proposal drafts under
-`docs/track-c/proposal/` were treated as superseded by `src/contracts.py`, per
-the team note; goldens are emitted through the canonical `GoldenTrace` models
-and results through `ComparisonResult`.
+- Track A: PR #4 was merged, then **reverted** (PR #7) pending contract rulings
+  on spec sections 4, 6.1, 7, 9. `main` has no Track A code. It returns in a new
+  rebased PR.
+- Track B: PR #6 open (`feat/track-b-causal`), not merged.
+- Contracts: PR #8 open (`contracts/rulings-a-d`). VCD-tail evidence for its
+  decision 11 was posted on the PR.
+- Conflict check (Nov 16): #5, #6, #8 touch disjoint files; pairwise and
+  combined merges are clean; `main + #5 + #8` passes the fast suite and mypy.
 
-## Changed files
+## C03 — completed
 
-- `benchmarks/common/benchlib.py` — stimulus parsing, golden emission through
-  contract models, epoch mapping (spec §7), the benchmark-local independent
-  checker (cycle §8.2 and handshake §8.3, declaration-order tie-break §10),
-  subprocess runners (argument arrays, per-run directories, wall-clock limit,
-  provenance with hashes and detected VCD scope prefix), VCD header/x scans.
-  This is deliberately not Track A's engine: observed values come from the
-  testbench's own phase-sampled JSONL, not from VCD value parsing.
-- `benchmarks/common/cases.py` — registry with verified per-schedule verdicts.
-- `benchmarks/case_0{1,2,3,4}_*/` — correct+mutant RTL, shared TB, stimulus
-  schedules, independent golden model, manifest, README each.
-- `benchmarks/graders/*.json` — hash-keyed mutation spans, outside analyzer
-  inputs.
-- `tests/track_c/test_benchmark_oracles.py` — 35 unit tests, no simulators.
-- `tests/track_c/test_benchmarks_sim.py` — 38 integration tests.
+Application service, adapters, CLI, and hardened runner in `src/app/`:
 
-## Commands and results (this environment)
+- `runner.py` — argument-array execution; unique per-run directories; every
+  input resolved (following symlinks) inside the manifest's directory before
+  any process starts; wall-clock timeout, trace-size limit, and caller
+  cancellation kill the whole process group (SIGTERM, then SIGKILL); capped,
+  reported logs; tool version, argv, exit codes, input hashes recorded.
+  Distinct statuses: ok, invalid_request, tool_missing, build_failed,
+  run_failed, timeout, artifact_limit, cancelled, trace_missing.
+- `selfcheck.py` — the benchmark self-check, moved here from `benchlib` and
+  strictly typed (benchlib re-exports it). Implements PR #8's stricter reset
+  rules (`EPOCH_ENDED_EARLY`, `EXPECTATIONS_CANCELLED_BY_RESET`,
+  `NOTHING_COMPARED`); compatible with the merged spec text.
+- `adapters.py` — `ComparisonAdapter`/`CausalAdapter` protocols, each labeled
+  `analysis` | `benchmark_self_check` | `synthetic_fixture`. Available now:
+  `SelfCheckComparison`, `FixtureCausal` (refuses any failure it was not
+  authored for).
+- `service.py` — manifest-driven `AnalysisService`; process failures map to
+  `error`/`invalid_input`, never `fail`; synthetic adapters require explicit
+  fixture mode; missing causal engine is the diagnostic `CAUSAL_UNAVAILABLE`,
+  never sample data. Writes `report.json` (run record
+  `waveroot-track-c-run` v1 wrapping contract objects); `load_report`
+  re-validates every contract object.
+- `cli.py` — `python -m src.app.cli analyze MANIFEST --variant V --schedule S`
+  and `open REPORT`; exit codes per spec 8.4; Ctrl-C cancels and reaps.
 
-- `uv sync --locked`; `uv run mypy src/` → clean (no src/ changes).
-- `uv run pytest -q` → 189 passed (116 pre-existing contract tests unchanged).
-- `uv run pytest -m "not integration" -q` → 151 passed, 38 deselected.
-- Simulators: Verilator 5.020 (Debian 5.020-1), Icarus Verilog 12.0 (stable),
-  installed via apt in the working container. Both required: the integration
-  lane **fails** (not skips) when its simulator is missing.
+Also: testbench errors now use `$fatal` — previously `$display("TB_ERROR")` +
+`$finish` exited 0, so a malformed stimulus line looked like a clean shorter
+run. The runner additionally treats any `TB_ERROR` output as a run failure.
+Manifests gained a `golden` block (module, modes, primary mode).
 
-## Verified first failures (mutant, directed; real simulator runs)
+## Commands and results
 
-| Case | Anchor | Observation |
-| --- | --- | --- |
-| case_01_fifo_wrap | `tb.dut.full` 1→0, +[empty, out_valid] | e0 c3 settled 55000 ps (Verilator) |
-| case_02_axi_skid | `tb.dut.m_valid` 1→0 | e0 c1 settled 35000 ps (Verilator) |
-| case_03_mac_overflow | `tb.dut.out_data` -32768→+17536 | e0 c3 settled 55000 ps (Verilator) |
-| case_04_alu_xprop | `tb.dut.out_data` `00000000`→`xxxxxxxx`, unknown_value | e0 c0 settled 25000 ps (Icarus, VCD contains real x) |
+- `uv run mypy src/` → clean (10 files, strict).
+- `uv run pytest -q` → 237 passed (116 contract, 35+4 oracle/checker, 38
+  benchmark integration, 17 runner, 27 service/CLI).
+- `uv run pytest -m "not integration" -q` → 186 passed, 51 deselected.
+- Simulators: Verilator 5.020, Icarus Verilog 12.0. Timeout and cancellation
+  are tested against real hanging `vvp` processes, with a guard test proving
+  the process probe sees full command lines (`ps -eww`).
 
-Correct variants pass every schedule in both modes. Masking controls
-(mutant passes by design): case_01 `multi_wrap`, `reset_midway`; case_03
-`mixed_bubbles`, `reset_flush` — documented in the manifests.
+## C04 — blocked, not complete
 
-## Notes for the next agent
+Requires real Track A and Track B modules on `main`; neither is present. The
+service is ready for them: implement `ComparisonAdapter` over Track A's
+provider/diff engine and `CausalAdapter` over Track B's slicer, using only
+`src/contracts.py` types, then run case_01 mutant/directed through both. The
+benchmark self-check is labeled `benchmark_self_check` and must not be
+reported as Track A coverage.
 
-- Timing matches the shared mock fixture: epoch 0 cycle 0 at 25000 ps; trace
-  time, no renormalization; phases `before`/`settled` at the edge time.
-- Verilator prefixes VCD scopes with `TOP.`; Icarus does not. The per-run
-  prefix is detected and recorded in `provenance.json` (`trace_scope_prefix`);
-  Track A's provider should consume the mapping, not assume a prefix.
-- Spec §8.1 requires every epoch to hold at least one golden record; a
-  handshake schedule therefore needs at least one transfer per epoch
-  (`benchlib.build_goldens` raises otherwise). Worth confirming with Dev 1
-  whether a transfer-less epoch should instead drop handshake mode.
-- Icarus 12 limitations encountered: no `break` statements, `$fgets` needs a
-  reg buffer (not `string`). The case_04 TB reflects both.
-- No changes to `src/`, `spec.md`, Track A/B paths, `pyproject.toml`, or
-  `.claude/settings.json`.
+## Open questions
 
-## Failing or skipped checks
-
-None in this environment. Not executed anywhere: Track A/B integration (C04),
-runner/CLI (C03), UI (C05+) — those are the next tickets.
+- Dev 1: spec §8.1 forbids epochs without golden records, so handshake
+  schedules need ≥1 transfer per epoch (`build_goldens` enforces this).
+- A console-script entry point would touch shared `pyproject.toml`; deferred to
+  a focused PR. Track A's waveform options get wired into `cli.py` when Track A
+  re-lands.
+- `benchmarks/common/benchlib.run_simulation` still has its own simple runner
+  for the benchmark tests; it could delegate to `src.app.runner.Runner`.
 
 ## Next single ticket
 
-C03 (Opus platform role): application service with injectable waveform/diff
-and causal adapters, CLI, per-run isolation, cancellation — building on
-`benchlib.run_simulation`'s conventions. Prompt 2 in
-`docs/track-c/agent-prompts.md`.
+C05 (Astra frontend role, Prompt 3): UI against `ComparisonResult` and
+`CausalReport` using the mock fixture plus real run records from
+`python -m src.app.cli analyze ... --json`. C04 follows when A and B land.

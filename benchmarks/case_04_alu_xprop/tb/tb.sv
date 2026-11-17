@@ -57,7 +57,7 @@ module tb;
           result = 1'b1;
           scanning = 1'b0;
         end else if (code > 0) begin
-          $display("TB_ERROR: malformed stimulus line: %0s", line);
+          $fatal(1, "TB_ERROR: malformed stimulus line: %0s", line);
           scanning = 1'b0;
         end
         // else: comment or blank line, keep reading
@@ -70,19 +70,19 @@ module tb;
     cycle_limit = 64;
     applied = 0;
     if (!$value$plusargs("stim=%s", stim_path)) begin
-      $display("TB_ERROR: missing +stim"); $finish;
+      $fatal(1, "TB_ERROR: missing +stim"); $finish;
     end
     if (!$value$plusargs("obs=%s", obs_path)) begin
-      $display("TB_ERROR: missing +obs"); $finish;
+      $fatal(1, "TB_ERROR: missing +obs"); $finish;
     end
     if (!$value$plusargs("vcd=%s", vcd_path)) begin
-      $display("TB_ERROR: missing +vcd"); $finish;
+      $fatal(1, "TB_ERROR: missing +vcd"); $finish;
     end
     void'($value$plusargs("cycle_limit=%d", cycle_limit));
     stim_fd = $fopen(stim_path, "r");
     obs_fd  = $fopen(obs_path, "w");
     if (stim_fd == 0 || obs_fd == 0) begin
-      $display("TB_ERROR: cannot open files"); $finish;
+      $fatal(1, "TB_ERROR: cannot open files"); $finish;
     end
     $dumpfile(vcd_path);
     $dumpvars(0, tb);
