@@ -131,6 +131,15 @@ stays labeled `benchmark_self_check` and is not Track A coverage.
 - `benchmarks/common/benchlib.run_simulation` still has its own simple runner
   for the benchmark tests; it could delegate to `src.app.runner.Runner`.
 
+## Continuing without a heavy model
+
+`docs/track-c/playbook.md` is the operating manual: the per-ticket loop, the
+gates (now automated in CI, PR #16), rules learned from real defects, and
+file-level specs with acceptance tests for C04 part 1, C04 part 2, C06, and
+C07. All three Track C branches have current `main` merged (decision 11,
+pyslang); the top branch also carries the CI workflow, so #13's checks run
+every gate against the whole stack.
+
 ## Next single ticket
 
 C04 part 1: the Track A comparison adapter (see above). Independent cold
