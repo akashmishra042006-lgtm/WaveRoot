@@ -54,6 +54,7 @@ b1x #
 #10
 0!
 #15
+#16
 """
 
 
@@ -105,7 +106,7 @@ def test_content_change_is_a_miss(tmp_path: Path, fixture: MockFixture) -> None:
     before = load_cached(trace, cache_dir=cache_dir)
     stat = trace.stat()
 
-    changed = text + "#100001\n"
+    changed = text + "#100002\n"
     trace.write_text(changed, encoding="utf-8")
     os.utime(trace, ns=(stat.st_atime_ns, stat.st_mtime_ns))  # same mtime, new content
     after = load_cached(trace, cache_dir=cache_dir)
