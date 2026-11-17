@@ -30,7 +30,9 @@ from src.waveform.fst import convert_fst_to_vcd_text, converter_identity, trace_
 from src.waveform.parser import ParsedTrace, SkippedVariable, VcdWaveformProvider, _Series, parse_vcd
 from src.waveform.select import check_patterns
 
-CACHE_FORMAT_VERSION: Final = 1
+# 2: spec 9 decision 11 changed coverage and the final timestep, so entries
+# parsed under version 1 are never reused.
+CACHE_FORMAT_VERSION: Final = 2
 DEFAULT_CACHE_DIR: Final = Path(".waveroot-cache")
 
 _DECIMAL_RE: Final = re.compile(r"0|[1-9][0-9]*")
