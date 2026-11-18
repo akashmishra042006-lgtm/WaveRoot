@@ -1,29 +1,68 @@
-# PR #18 — dashboard review fixes (November 17, 2026)
+# Track C — current state (November 18, 2026)
 
-React 19, Tailwind, React Flow and Canvas presentation on feat/track-c-ui.
-Locked contracts unchanged. Latest main, including C04 part 1 (#17), is merged.
+Everything Track C planned is on `main`: C01–C07. Track A (#9) and Track B
+(#6, #15) are merged; Track C's causal adapter (C04 part 2, #27) wires Track B's
+engine into `analyze`, the local API and the UI. Sections below are earlier
+milestones, kept for history; where they disagree with this section, this one
+wins.
 
-Review fixes: Chrome is again the CI default; local Chromium is an explicit
-browser override. Unknown hex has no numeric prefix and the failure strip
-respects radix. Cursor text omits absent phase. Named valueBefore documents
-strict-before integer-ps lookup, including missing prior history. Blank source
-lines retain height. Gap-free waveform segments avoid per-segment cloning.
+## What was verified, and how
 
-Validation of this revision:
-- UI: 61 tests, strict TypeScript check and production build passed.
-- Chromium 159.0.8154.6: widths 1440/1024/768/375, no overflow, visible control
-  overlaps or page errors. Checks require Canvas pixels, React Flow paths,
-  preserved blank-line heights, and synchronized node clicks. Screenshots inspected.
-- 100 signals x 1,000 transitions, 1,000 nodes on Intel Xeon Platinum 8573C:
-  selection median 16.7 ms, max 27.8 ms; cursor median 16.3 ms, max 19.5 ms.
-  Local measurements are not a guarantee on shared CI runners.
-- Locked sync and mypy passed (17 files); Python unit gate: 436 passed,
-  74 integration cases deselected.
-- Local simulator gate remains blocked by absent Verilator/Icarus/FST tools.
-  CI must verify these; simulator tests were not skipped or weakened here.
+- Linux, Verilator 5.020 and Icarus 12.0: `uv run mypy src/` clean (24 files);
+  `uv run pytest -m "not integration"` 691 passed; `uv run pytest -m integration`
+  103 passed in a fresh-session cold review (Opus, #27 head); UI `npm ci`,
+  build, and 78 Vitest tests; `ui/scripts/live_check.py` (real Chrome + API +
+  Verilator + Track B) passes, including a hash-verified source for the first
+  real suspect. CI on `main` runs python, simulators and ui jobs.
+- Release evidence: `uv run python -m benchmarks.release_evidence`. Both
+  comparison engines match all 32 documented verdicts (detection 12/12, masking
+  controls 4/4, correct-variant passes 16/16). Localization (Track B on Track
+  A's first failure), 4 cases / 12 detecting schedules: ranked 12/12, top-1 6/12,
+  top-2 12/12, top-5 12/12; mutated line is rank 1 for FIFO and AXI skid, rank 2
+  for MAC and ALU. The 12 rows are about 4 independent observations (suspects
+  repeat across a case's schedules) and there is no held-out set: a smoke
+  suite, not an accuracy estimate. The script reads the grader only after
+  analysis and refuses to rank if the grader's file hash does not match the
+  analyzed revision.
+- Independent review: Track B's engine was audited by a separate model
+  ("Astra", a ChatGPT model, not a person); the cold review of Track C was a
+  fresh Opus session. Neither is a substitute for a human review before a
+  release claim. The cold review found no P0/P1; its P2/P3 findings (doubled
+  localization denominator, unchecked grader hash, errored runs dropped,
+  overclaiming wording, uncaught engine exceptions) are fixed in #27.
 
-Next for this PR: reviewer re-review and CI verification. Earlier handoff below
-records previous milestones, not validation claims for this UI revision.
+## Not verified / known limits
+
+- **macOS has never run the suite.** #24 replaces `os.waitid` (absent in
+  Python on macOS) with `Popen.poll()`; Linux tests force that path, but a Mac
+  must run `uv run pytest -m integration` before anyone relies on it. The
+  fallback reaps the leader before the final group kill; a recycled process-
+  group ID in that window is theoretical, not observed.
+- Case 3 (MAC) reports Track B's `SVA_LATENCY_ASSUMED`: the generated assertion
+  assumes an output latency. Decide whether the manifest should declare it.
+- The causal step has no wall-clock limit and does not check cancellation. It
+  costs under 10 ms on the current cases; a trace near the 256 MB cap could
+  block the API's single worker. A wrong `reset.active` in a manifest gives no
+  warning.
+- The API has no authentication: any local program can use it. Host/Origin
+  guards stop web pages and other hosts only.
+- Fixture causal data (`FixtureCausal`) is never evidence; real runs use
+  `TrackBCausal`, and `analyze --causal none` reports a failure unlocalized.
+
+## Open decisions (not Track C's to make alone)
+
+- Dev 1 / spec: what is `SourceFile.path` relative to? The API and Track C's
+  adapter resolve it against the case directory; the shared mock fixture uses a
+  repo-root path. Needs a spec decision.
+- Dev 1: spec §8.1 handshake schedules need at least one transfer per epoch.
+- Held-out evaluation: write unseen designs or schedules, reviewed by someone
+  other than their author, before making any accuracy claim.
+
+## Next single ticket
+
+Run `uv run pytest -m integration` on a Mac and confirm #24. Then decide the
+case-3 latency question with Track B. Release notes must say: 4 authored cases,
+mutated line in the top 2 for all four, no held-out accuracy claim.
 
 ---
 
@@ -152,8 +191,7 @@ integration.
 engine on a saved trace using `add_waveform_arguments` unchanged. Tests:
 `tests/track_c/test_c04_waveform.py`. UI fixtures were regenerated; the UI keeps
 one real self-check record (`real_fifo_fail_selfcheck.json`) to test the note
-that only that adapter shows. Still open: C04 part 2 (Track B causal adapter)
-waits for Track B (#6, #15).
+that only that adapter shows. C04 part 2 (Track B causal adapter) was completed later in #27.
 
 ## C06 — local API (done; needs cold review)
 
@@ -174,9 +212,7 @@ Default origins: only the server's own; `serve --dev` adds Vite dev/preview,
 guards stop web pages and other hosts); one job at a time by default; job
 records live in memory and are lost on restart (run directories on disk
 remain); the UI serves no built bundle itself (use `vite preview` or `dev`,
-whose origins are allowed by default). A real run today has no causal report
-(Track B), so the source/graph/waveform panels fill in only once C04 part 2
-lands; the source endpoint is covered by tests with the mock causal report.
+whose origins are allowed by default). (As of #27 a failing real run carries Track B's causal report.)
 
 ## Open questions
 
@@ -200,8 +236,3 @@ file-level specs with acceptance tests for C04 part 1, C04 part 2, C06, and
 C07. All three Track C branches have current `main` merged (decision 11,
 pyslang); the top branch also carries the CI workflow, so #13's checks run
 every gate against the whole stack.
-
-## Next single ticket
-
-Independent cold review of the C06 PR in a fresh session. Then C04 part 2
-when Track B merges, then C07 (release evidence).
