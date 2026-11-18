@@ -53,3 +53,17 @@ uv run pytest -m "not integration" -q                        # skip simulator la
 The integration lane requires Verilator and Icarus Verilog and **fails** (not
 skips) when the required simulator is missing: a skipped four-state run is not
 completion (spec.md section 13).
+
+## Release evidence (C07)
+
+```sh
+uv run python -m benchmarks.release_evidence --out /tmp/evidence
+```
+
+Runs every case x schedule x variant through the real analysis service with
+both Track A's comparison and the benchmark self-check, and writes
+`evidence.md` / `evidence.json`: detection, masking controls, and
+correct-variant replay as counts with denominators, plus every detected
+anchor. Exits non-zero if any documented verdict is contradicted or a required
+simulator is missing. Localization stays `unranked` until a real causal adapter
+is wired in (C04 part 2); fixture causal data is never counted.
