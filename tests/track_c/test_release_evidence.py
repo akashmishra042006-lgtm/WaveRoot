@@ -8,7 +8,8 @@ from pathlib import Path
 import pytest
 
 from benchmarks import release_evidence as ev
-from benchmarks.common.cases import CASES
+from src.contracts import AnalysisStatus
+from benchmarks.common.cases import CASES, Case
 
 
 def test_expected_verdicts_follow_the_registry() -> None:
@@ -59,3 +60,56 @@ def test_programmatic_run_also_rejects_invalid_engines(engines: tuple[str, ...],
 
 def test_engine_selection_preserves_explicit_order() -> None:
     assert ev.parse_engines(" self-check, track-a ") == ("self-check", "track-a")
+
+
+def _row(engine: str, rank: int | str, schedule: str = "directed") -> ev.Row:
+    return ev.Row(CASES[0].case_id, schedule, "mutant", engine, "fail", "fail", True, "", rank)
+
+
+def test_localization_denominator_counts_only_localizing_engines_and_keeps_errors() -> None:
+    case = CASES[0]
+    detected = next(s for s in case.schedules if s.mutant_detected)
+    masked = next((s for s in case.schedules if not s.mutant_detected), None)
+
+    class Out:
+        def __init__(self, status: AnalysisStatus) -> None:
+            self.status = status
+            self.causal = None
+
+    assert ev._localization(case, detected, "mutant", "self-check", Out(AnalysisStatus.FAIL)) == ""
+    assert ev._localization(case, detected, "mutant", "track-a", Out(AnalysisStatus.ERROR)) == "unranked"
+    assert ev._localization(case, detected, "mutant", "track-a", Out(AnalysisStatus.PASS)) == "unranked"
+    assert ev._localization(case, detected, "correct", "track-a", Out(AnalysisStatus.PASS)) == ""
+    if masked is not None:
+        assert ev._localization(case, masked, "mutant", "track-a", Out(AnalysisStatus.PASS)) == ""
+
+
+def test_report_does_not_double_count_or_overclaim() -> None:
+    rows = [_row("track-a", 1), _row("track-a", "unranked", "full_hold")]
+    text = ev.markdown(rows, ev.summarize(rows), {"platform": "x", "python": "y", "tools": {}})
+    assert "ranked at all: 1/2" in text and "top-1: 1/2" in text
+    assert "about 1 independent observations" in text and "no held-out set" in text
+
+
+def test_stale_grader_is_refused_not_ranked(tmp_path: Path) -> None:
+    """A report citing a different revision than the grader's must not be ranked."""
+    import hashlib
+    import json
+    from types import SimpleNamespace
+
+    case = CASES[0]
+    truth = json.loads((case.directory.parent / "graders" / f"{case.case_id}.json").read_text())
+    span = truth["mutation"]["accepted_spans"][0]
+    rel = Path(span["path"]).relative_to(Path("benchmarks") / case.directory.name)
+    real = hashlib.sha256((case.directory / rel).read_bytes()).hexdigest()
+    assert real == span["sha256"]  # the committed grader is current
+
+    def outcome(cited_sha: str) -> SimpleNamespace:
+        src = SimpleNamespace(id="s0", path=str(rel), sha256=cited_sha)
+        loc = SimpleNamespace(source_id="s0", line=span["start_line"], end_line=span["end_line"])
+        sus = SimpleNamespace(rank=1, location=loc)
+        return SimpleNamespace(causal=SimpleNamespace(sources=[src], suspects=[sus]))
+
+    assert ev._mutated_rank(case, outcome(real)) == 1
+    with pytest.raises(ev.StaleGraderError):
+        ev._mutated_rank(case, outcome("0" * 64))

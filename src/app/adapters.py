@@ -17,6 +17,7 @@ are labeled by ``kind`` so nothing synthetic can pass for analysis:
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
 
@@ -46,12 +47,31 @@ class ComparisonAdapter(Protocol):
     def compare(self, golden: GoldenTrace, run: RunRecord) -> ComparisonResult: ...
 
 
+@dataclass(frozen=True)
+class CausalContext:
+    """What a causal engine needs beyond the failure, taken from the case
+    manifest (never from the run's output): the case directory that every
+    ``SourceFile.path`` is relative to, the DUT's place in the testbench, and
+    the reset signal's manifest-declared path and active level."""
+
+    case_id: str
+    root: Path
+    top: str | None
+    dut_instance: str | None
+    reset_path: str | None
+    reset_active: str | None
+
+
 class CausalAdapter(Protocol):
     name: str
     kind: AdapterKind
 
     def analyze(
-        self, failure: FailureAnchor, run: RunRecord, sources: Sequence[Path]
+        self,
+        failure: FailureAnchor,
+        run: RunRecord,
+        sources: Sequence[Path],
+        context: CausalContext,
     ) -> CausalReport: ...
 
 
@@ -132,7 +152,11 @@ class FixtureCausal:
         self._report = load_mock_fixture(fixture_path).report
 
     def analyze(
-        self, failure: FailureAnchor, run: RunRecord, sources: Sequence[Path]
+        self,
+        failure: FailureAnchor,
+        run: RunRecord,
+        sources: Sequence[Path],
+        context: CausalContext,
     ) -> CausalReport:
         authored = self._report.failure
         # Compare everything that identifies the failure; ``detail`` is prose.
@@ -144,3 +168,59 @@ class FixtureCausal:
                 "refusing to attach it to this run"
             )
         return self._report
+
+
+class TrackBCausal:
+    """Track B's causal engine over the failing run's real trace.
+
+    Everything the engine needs comes from the manifest-derived context and the
+    run record; the grader's mutation locations are never an input. The trace
+    hierarchy prefix (``TOP.`` under Verilator) is the one detected for this run
+    and is applied to the manifest's canonical paths, never assumed.
+    """
+
+    name = "track_b_causal"
+    kind: AdapterKind = "analysis"
+
+    def analyze(
+        self,
+        failure: FailureAnchor,
+        run: RunRecord,
+        sources: Sequence[Path],
+        context: CausalContext,
+    ) -> CausalReport:
+        # Imported here so the fixture-only and comparison-only paths do not
+        # load the engine.
+        from src.causal import DesignError, SliceOptions, analyze_failure
+        from src.waveform import VcdWaveformProvider, parse_vcd
+
+        missing = [
+            n for n, v in (("top", context.top), ("dut_instance", context.dut_instance),
+                           ("reset.path", context.reset_path), ("reset.active", context.reset_active))
+            if not v
+        ]
+        if missing:
+            raise AdapterError(f"the manifest does not declare {', '.join(missing)}; cannot locate the DUT in the trace")
+        if run.trace is None or run.trace_scope_prefix is None:
+            raise AdapterError("the run has no trace or detected scope prefix")
+        prefix = run.trace_scope_prefix
+        try:
+            provider = VcdWaveformProvider(parse_vcd(run.trace.read_text()))
+        except (OSError, ValueError) as exc:
+            raise AdapterError(f"cannot read the trace for causal analysis: {exc}") from exc
+        assert context.top and context.dut_instance and context.reset_path and context.reset_active
+        try:
+            return analyze_failure(
+                failure,
+                provider,
+                list(sources),
+                root=context.root,
+                options=SliceOptions(
+                    trace_scope=f"{prefix}{context.top}.{context.dut_instance}",
+                    reset_path=f"{prefix}{context.reset_path}",
+                    reset_active=context.reset_active,
+                    case_id=context.case_id,
+                ),
+            )
+        except DesignError as exc:
+            raise AdapterError(f"the design could not be analyzed: {exc}") from exc
