@@ -29,6 +29,7 @@ from src.causal import (
     GraphFormatError,
     SliceOptions,
     analyze_comparison,
+    analyze_failure,
     build_design_graph,
     dump_design_graph,
     load_design_graph,
@@ -3432,3 +3433,58 @@ def test_round4_the_modeled_subset_is_still_traced(tmp_path: Path) -> None:
     assert branches(edges_of(report, ("b", 2, SETTLED), ("y", 2, SETTLED))) == {
         BranchStatus.PRUNED
     }
+
+
+# ---- Track C entry point (C04 part 2) ---------------------------------------
+
+
+def test_analyze_failure_is_build_then_slice(
+    fifo_failure: FailureAnchor, fifo_provider: MockWaveformProvider, fifo_design: DesignGraph
+) -> None:
+    options = SliceOptions(trace_scope=SCOPE, reset_path="tb.dut.rst_n", reset_active="0")
+    report = analyze_failure(fifo_failure, fifo_provider, [FIFO_SV], root=REPO, options=options)
+    assert report == slice_failure(fifo_failure, fifo_provider, fifo_design, options)
+    assert report.provenance.kind is ProvenanceKind.ANALYSIS
+    assert CausalReport.model_validate_json(report.model_dump_json()) == report
+
+
+def test_analyze_failure_source_paths_are_relative_to_the_given_root(
+    tmp_path: Path, fifo_failure: FailureAnchor, fifo_provider: MockWaveformProvider
+) -> None:
+    """The base of SourceFile.path is the caller's choice, e.g. a benchmark case directory."""
+    case = tmp_path / "case_01"
+    rtl = case / "rtl" / "mutant" / "fifo.sv"
+    rtl.parent.mkdir(parents=True)
+    rtl.write_bytes(FIFO_SV.read_bytes())
+    options = SliceOptions(trace_scope=SCOPE)
+    report = analyze_failure(fifo_failure, fifo_provider, [rtl], root=case, options=options)
+    (source,) = report.sources
+    assert source.path == "rtl/mutant/fifo.sv"
+    assert source.sha256 == hashlib.sha256(FIFO_SV.read_bytes()).hexdigest()
+    assert all(
+        node.location is None or node.location.source_id == source.id for node in report.nodes
+    )
+    # Same analysis whatever the base: only the recorded path changes, in the source
+    # list and in the generated assertion's comment that cites the top suspect's file.
+    from_repo = analyze_failure(fifo_failure, fifo_provider, [FIFO_SV], root=REPO, options=options)
+    differing = [
+        name for name in CausalReport.model_fields if getattr(from_repo, name) != getattr(report, name)
+    ]
+    assert differing == ["sources", "assertions"], differing
+    assert all("rtl/mutant/fifo.sv:" in a.text for a in report.assertions)
+    assert all(
+        a.text.replace("tests/fixtures/mock_fifo_wrap.sv", "rtl/mutant/fifo.sv") == b.text
+        for a, b in zip(from_repo.assertions, report.assertions, strict=True)
+    )
+
+
+def test_analyze_failure_refuses_sources_outside_the_root(
+    tmp_path: Path, fifo_failure: FailureAnchor, fifo_provider: MockWaveformProvider
+) -> None:
+    options = SliceOptions(trace_scope=SCOPE)
+    with pytest.raises(DesignError, match="not inside the source root"):
+        analyze_failure(fifo_failure, fifo_provider, [FIFO_SV], root=tmp_path, options=options)
+    with pytest.raises(DesignError, match="not found"):
+        analyze_failure(
+            fifo_failure, fifo_provider, [tmp_path / "missing.sv"], root=tmp_path, options=options
+        )

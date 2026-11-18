@@ -32,14 +32,22 @@ from __future__ import annotations
 
 import re
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
+from pathlib import Path
 from typing import Final
 
 from src.causal import expr as ir
 from src.causal import fourstate as fs
-from src.causal.ast_graph import DesignGraph, Driver, GuardedAssign, ProcessKind, SignalKind
+from src.causal.ast_graph import (
+    DesignGraph,
+    Driver,
+    GuardedAssign,
+    ProcessKind,
+    SignalKind,
+    build_design_graph,
+)
 from src.causal.fourstate import Tri, Vec
 from src.causal.sva_synth import synthesize_assertion
 from src.contracts import (
@@ -93,7 +101,11 @@ class SliceOptions:
     slice may reach (None means back to cycle 0 of the failure's epoch).
     ``expand_holds`` makes a held register step back one cycle at a time, which
     exposes the hold condition of every cycle instead of one carry edge.
-    ``reset_path`` and ``reset_active`` only qualify the generated assertion.
+    ``reset_path`` and ``reset_active`` name the reset as a trace path and its
+    active level (``"0"`` or ``"1"``). They qualify the generated assertion and
+    let a register that the reset branch never assigns be located at that
+    branch. Nothing is inferred from names, so without them such a register
+    stays an epoch boundary at its declaration.
     """
 
     trace_scope: str
@@ -107,6 +119,33 @@ class SliceOptions:
     reset_path: str | None = None
     reset_active: str | None = None
     case_id: str | None = None
+
+
+def analyze_failure(
+    failure: FailureAnchor,
+    provider: WaveformProvider,
+    sources: Sequence[Path | str],
+    *,
+    root: Path | str,
+    options: SliceOptions,
+    top: str | None = None,
+) -> CausalReport:
+    """Track C's entry point: elaborate ``sources`` and slice back from ``failure``.
+
+    ``sources`` are the RTL files the analyzer may see (a benchmark's
+    ``analysis_inputs.rtl``), not the testbench. Each ``SourceFile.path`` in the
+    report is relative to ``root``, and every source must lie inside it.
+    ``top`` names the module to analyze when the sources hold more than one
+    top-level module. ``provider`` serves the same trace the failure came from,
+    and ``options.trace_scope`` is the trace path of that module's instance.
+
+    The report validates against ``src.contracts.CausalReport`` and holds only
+    analysis (``provenance.kind`` is ``analysis``). Raises ``DesignError`` when a
+    source is missing or outside ``root``, elaboration fails, or ``top`` is not
+    resolved.
+    """
+    design = build_design_graph(sources, root=root, top=top)
+    return slice_failure(failure, provider, design, options)
 
 
 def slice_failure(
