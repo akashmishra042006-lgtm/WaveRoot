@@ -432,6 +432,14 @@ and `diagnostics`.
 - `SourceFile` is `id`, a normalized relative POSIX `path`, and the file's
   SHA-256. `SourceSpan` is an inclusive 1-based line range in that file. Track C
   checks the hash before showing a line as the analyzed code.
+- `SourceFile.path` is relative to the analysis source root: the directory the
+  caller passes to Track B as `root`. Every analyzed file lies inside it. For a
+  benchmark case run, the source root is the case directory (the directory that
+  holds the case manifest). For the mock fixture of section 16, it is the
+  repository root. The report does not record its root; a consumer resolves
+  `path` against the root the analysis used, refuses a path that resolves
+  outside it, and never shows a file whose hash does not match as the analyzed
+  code.
 - `CandidateAssertion.validation` is `candidate`, `validated`, `failed`, or
   `unsupported`. `validated` and `failed` must name the tool. Text alone is
   never presented as validated.
@@ -565,12 +573,19 @@ change process in section 2 rather than working around it locally:
 12. An `x`/`z` reset, or a reset change at an edge, is ignored until reset has
     first been observed active, matching the clock rule of decision 9. After
     that it makes the comparison `inconclusive` (section 7).
+13. `SourceFile.path` is relative to the analysis source root that the caller
+    passes to Track B: the case directory for benchmark runs and the repository
+    root for the mock fixture (section 12). This records existing behavior of
+    Track B (`build_design_graph(root=...)`) and Track C (the API resolves
+    sources inside the job's case directory); no code changes.
 
 ## 16. Mock fixture
 
 `tests/fixtures/mock_fifo_failure.json` is a synthetic eight-cycle synchronous
 FIFO wrap failure. `tests/fixtures/mock_fifo_golden.jsonl` is its golden trace
 and `tests/fixtures/mock_fifo_wrap.sv` is the source its locations point at.
+Its source paths are relative to the repository root (decision 13), so a
+consumer that resolves sources against a case directory does not find them.
 
 - Clock `tb.dut.clk` rises at 5000 ps and every 10000 ps after. Reset
   `tb.dut.rst_n` is low until 20000 ps. Cycles 0 to 7 are the edges at 25000 ps
