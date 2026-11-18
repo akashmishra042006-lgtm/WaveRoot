@@ -20,19 +20,51 @@ is background. Where they differ, the spec wins.
 | `src/causal/graph_io.py` | `dump_design_graph`, `load_design_graph`, `verify_sources` (B-04): deterministic JSON form of a `DesignGraph`, format version 1, internal to Track B. |
 | `tests/test_causal.py` | Engine tests against `MockWaveformProvider`: 73 for the first engine, 121 after B-01 to B-04. |
 
-Supported today: module instances with input and output ports (B-01; signals
-are named by path from the top instance, such as `u_core.q`, and clocks are
-resolved through plain port connections); `assign`; net declaration
-assignments; `always_comb`; `always @*`; `always_ff` and
-`always @(posedge clk)` with one clock; `if`; `case`, `casez`, `casex`; `?:`;
-packed vectors; constant and indexed part-selects; packed struct field reads;
-parameters and enum values; concatenated assignment targets; fixed-size
-unpacked arrays of integral elements, up to 4096 elements (B-02; one signal per
-element, `mem[2]` or `grid[1][0]`, reads and writes selected by `index`
-guards); unpacked structs flattened to one signal per leaf field, `s.f` or
-`o.inner.arr[1]`, with whole copies and assignment patterns lowered field by
-field (B-03); bit-precise partial writes through constant part-selects, packed
-struct fields, and packed union members (B-03).
+The engine models an **allowlist** (PR #6 review round 4). Every driver
+outside it is an unsupported driver: the slice stops there with `truncated`
+and `UNSUPPORTED_DRIVER`, and nothing is pruned. A gap in the subset therefore
+costs coverage, never a wrong answer (spec §12). The subset:
+
+- Scopes: the top module and module instances connected through input and
+  output ports (B-01; signals are named by path from the top instance, such as
+  `u_core.q`, and clocks are resolved through plain port connections).
+- Processes: continuous `assign` and net declaration assignments;
+  `always_ff` and `always @(posedge|negedge clk)` on one one-bit clock with
+  nonblocking assignments; `always_comb` and `always @*` with blocking
+  assignments only. A plain level-sensitive list (`@(a or b)`, no `iff`, whole
+  signals only) that names every signal the process reads counts as
+  `always @*`.
+- Statements: blocks, `if` / `else` (including `unique` and `priority`),
+  `case`, `casez`, `casex`, assignments to signals of the design.
+- Expressions: signals, parameters, and enum values; operators; `?:`; packed
+  vectors; constant and indexed part-selects; packed struct field reads;
+  concatenations and concatenated targets; casts; `$signed`, `$unsigned`, and
+  the pure system functions in `ast_graph._PURE_SYSTEM_CALLS`.
+- Values: fixed-size unpacked arrays of integral elements, up to 4096
+  elements (B-02; one signal per element, `mem[2]` or `grid[1][0]`, reads and
+  writes selected by `index` guards); unpacked structs flattened to one signal
+  per leaf field, `s.f` or `o.inner.arr[1]`, with whole copies and assignment
+  patterns lowered field by field (B-03); bit-precise partial writes through
+  constant part-selects, packed struct fields, and packed union members (B-03).
+
+Refused, with the reason in `Driver.unsupported`: `inout`, `ref`, and
+interface ports; generate blocks, instance arrays, gate primitives, and
+checkers (every signal they may write gets a `scope` driver); asynchronous
+reset or several edge events; `iff`; `always_latch`; blocking assignments in a
+clocked process; nonblocking assignments in a combinational process;
+intra-assignment delays; incomplete event lists; user-defined function and
+task calls; other system calls (`$past`, `$random`, ...); loops, waits, and
+every other statement; pattern conditions and `case ... inside`; local and
+automatic variables and other names that are not signals of the design.
+Undriven internal signals and unconnected input ports also end the slice.
+
+Inside the subset, operators that are not evaluated (for example `inside`
+or `**`) and pure system functions keep every operand as a dependence; the
+value is unknown and no guard that contains them prunes. The same holds for
+array slices, sub-arrays, multi-dimensional and replicated assignment
+patterns, whole-value assignments from anything but a same-shaped value or a
+pattern, arrays above the element cap or with negative indices (one aggregate
+signal, `ARRAY_NOT_EXPANDED`), and struct and array ports.
 
 Bit demand (B-03). Nodes stay whole-signal, but the slicer records which bits
 of each node it must explain. A constant part-select or packed field read
@@ -50,23 +82,6 @@ could claim known bits the simulator never produces, which could then prune a
 branch the simulator took. `ArrayRead` therefore evaluates such a read to
 all-`x`. Pruning is unaffected: an unknown index keeps every element through
 its `index` guards.
-
-Reported but not traversed (the slice stops there and sets `truncated`):
-`inout`, `ref`, and interface ports; unconnected input ports; instance arrays
-and generate blocks; asynchronous reset or several edge events;
-`always_latch`; blocking assignments inside a clocked process; undriven
-internal signals; calls to user-defined functions (their bodies may read
-signals that are not arguments); level-sensitive event lists that do not name
-every signal the process reads.
-
-Kept as unknown dependencies (every operand is retained, nothing is
-evaluated): loops and other unmodeled statements, `inside`, system function
-calls other than `$signed` and `$unsigned`; array slices, sub-arrays,
-multi-dimensional and replicated assignment patterns, and whole-value
-assignments from anything but a same-shaped value or a pattern; arrays above
-the element cap or with negative indices (one aggregate signal,
-`ARRAY_NOT_EXPANDED`); struct and array ports. A level-sensitive event list
-that names every signal the process reads is treated exactly like `always @*`.
 
 ### 1.1 How the slicer treats time
 
@@ -132,9 +147,9 @@ boundary. Track C must pass both from the manifest.
   in an arm known to be taken, or an `if` with an `else` or a `case` with a
   `default` whose every possible arm writes it. Bits the process never writes
   belong to other drivers and are not checked against it.
-- A process with an intra-assignment delay (`q <= #1 d`), a call to a
-  user-defined function, or an incomplete level-sensitive event list is an
-  unsupported driver; the slice stops there.
+- Any driver outside the modeled subset (section 1) is an unsupported
+  driver; the slice stops there. Widen the subset only together with tests
+  that check the new construct against simulation.
 - `max_cycles_back` bounds the hold scan as well as the slice, and
   `max_nodes` bounds the report: no node is added past it.
 - A hold scan is remembered per signal, demanded bits, and start cycle, so

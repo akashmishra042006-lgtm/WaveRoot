@@ -72,6 +72,8 @@ class ProcessKind(StrEnum):
     ALWAYS_LATCH = "always_latch"
     PORT = "port"
     INSTANCE = "instance"
+    # A generate block, instance or checker array, or primitive that is not traversed.
+    SCOPE = "scope"
 
 
 @dataclass(frozen=True, slots=True)
@@ -332,6 +334,32 @@ _DIRECTIONS: dict[ast.ArgumentDirection, SignalKind] = {
 # The stubs omit EdgeKind.None_ (a level-sensitive event), so edges are matched positively.
 _EDGE_KINDS = (ast.EdgeKind.PosEdge, ast.EdgeKind.NegEdge, ast.EdgeKind.BothEdges)
 
+# System functions whose value depends only on the current values of their
+# arguments. They are not evaluated, but every signal they read is kept, so a
+# dependence is never lost. Any other system call ($past, $random, $time, ...)
+# makes its driver unsupported.
+_PURE_SYSTEM_CALLS = frozenset(
+    {
+        "$bits",
+        "$clog2",
+        "$countbits",
+        "$countones",
+        "$dimensions",
+        "$high",
+        "$increment",
+        "$isunknown",
+        "$left",
+        "$low",
+        "$onehot",
+        "$onehot0",
+        "$right",
+        "$signed",
+        "$size",
+        "$unpacked_dimensions",
+        "$unsigned",
+    }
+)
+
 
 MAX_ARRAY_ELEMENTS: Final = 4096
 """Unpacked arrays with more elements than this stay one aggregate signal."""
@@ -486,10 +514,10 @@ class _Lowerer:
         self._port_value: ir.Expr | None = None
         # Name prefix of the instance being lowered: "" for the top, "u_core." below it.
         self._scope = ""
-        # Set when the process being lowered contains an intra-assignment delay.
-        self._delayed = False
-        # Name of a user-defined subroutine the process being lowered calls, if any.
-        self._called: str | None = None
+        # Why the process being lowered falls outside the analyzed subset, if it does.
+        # Only an allowlisted subset is modeled (see ``_refuse``); anything else makes
+        # the whole driver unsupported, so the slice stops there instead of guessing.
+        self._unmodeled: str | None = None
 
     # ---- top level ------------------------------------------------------
 
@@ -544,12 +572,7 @@ class _Lowerer:
                 ast.SymbolKind.PrimitiveInstance,
                 ast.SymbolKind.CheckerInstance,
             ):
-                self._diag(
-                    "UNSUPPORTED_SCOPE",
-                    f"{member.kind.name} {member.name or '(unnamed)'} at "
-                    f"{self._where(member.location)} is not traversed; signals it drives "
-                    "appear undriven.",
-                )
+                self._lower_untraversed(member)
         self._scope = outer
 
     def _declare(
@@ -706,7 +729,7 @@ class _Lowerer:
         assigns: list[GuardedAssign] = []
         assignment = symbol.assignment
         span = self._span(assignment.sourceRange)
-        self._called = None
+        self._unmodeled = None
         if isinstance(assignment, ast.AssignmentExpression):
             self._lower_assignment(assignment, (), assigns, span)
         else:
@@ -714,7 +737,7 @@ class _Lowerer:
                 "UNSUPPORTED_STATEMENT",
                 f"continuous assignment at {self._where(symbol.location)} is not an assignment.",
             )
-        unsupported = self._call_reason()
+        unsupported = self._take_unmodeled()
         if symbol.delay is not None:
             unsupported = "delayed continuous assignment (delays are outside the MVP)"
         self._add_drivers(
@@ -734,7 +757,7 @@ class _Lowerer:
         if initializer is None or info is None:
             return
         span = self._span(initializer.sourceRange) or info.span
-        self._called = None
+        self._unmodeled = None
         rhs = self._lower(initializer)
         assign = GuardedAssign(
             target=name,
@@ -752,9 +775,61 @@ class _Lowerer:
             ProcessKind.CONTINUOUS,
             None,
             span,
-            self._call_reason(),
+            self._take_unmodeled(),
             None,
         )
+
+    def _lower_untraversed(self, member: ast.Symbol) -> None:
+        """Give every module signal a scope may write an unsupported driver.
+
+        Generate blocks, instance and checker arrays, and gate primitives are not
+        traversed. Without a driver, a signal they write would look driven only by
+        the traversed code, so the slice would silently miss them (spec 12).
+        """
+        if getattr(member, "isUninstantiated", False):
+            return
+        label = f"{member.kind.name} {member.name or '(unnamed)'}"
+        written: dict[str, None] = {}
+
+        def visit(node: object) -> None:
+            if not isinstance(node, ast.AssignmentExpression):
+                return
+            targets = self._targets(node.left)
+            if targets is not None:
+                for target in targets:
+                    written.setdefault(target.signal)
+                return
+
+            # Unresolved target: keep every module signal it names, erring wide.
+            def names(inner: object) -> None:
+                if isinstance(inner, ast.NamedValueExpression):
+                    local = self._local_name(inner.symbol)
+                    if local is not None:
+                        written.setdefault(local)
+
+            node.left.visit(names)
+
+        member.visit(visit)
+        self._unmodeled = None
+        shown = ", ".join(written) if written else "none found"
+        self._diag(
+            "UNSUPPORTED_SCOPE",
+            f"{label} at {self._where(member.location)} is not traversed; the module signals "
+            f"it may drive ({shown}) end the slice.",
+        )
+        span = self._line_span(member.location)
+        for signal in written:
+            self._drivers.setdefault(signal, []).append(
+                Driver(
+                    target=signal,
+                    edge_type=EdgeType.COMBINATIONAL,
+                    process=ProcessKind.SCOPE,
+                    clock=None,
+                    assigns=(),
+                    span=span,
+                    unsupported=f"driven from {label}, which is not traversed",
+                )
+            )
 
     def _lower_instance(self, instance: ast.InstanceSymbol, child_scope: str) -> None:
         """Lower the port connections of ``instance``; called in the parent's scope."""
@@ -801,6 +876,7 @@ class _Lowerer:
     ) -> None:
         info = self._signals[child]
         span = self._span(expression.sourceRange) or fallback
+        self._unmodeled = None
         rhs = self._lower(expression)
         if rhs.width != info.width:
             rhs = ir.Convert(info.width, info.signed, rhs)
@@ -810,7 +886,13 @@ class _Lowerer:
         text = f"{child} = {self._text(expression.sourceRange) or ir.to_sv(rhs)}"
         assign = GuardedAssign(child, True, rhs, (), (), True, span, text)
         self._add_drivers(
-            [assign], EdgeType.COMBINATIONAL, ProcessKind.PORT, None, span, None, None
+            [assign],
+            EdgeType.COMBINATIONAL,
+            ProcessKind.PORT,
+            None,
+            span,
+            self._take_unmodeled(),
+            None,
         )
 
     def _lower_output_port(
@@ -821,10 +903,17 @@ class _Lowerer:
         self._port_value = ir.SignalRef(info.width, info.signed and not info.is_aggregate, child)
         assigns: list[GuardedAssign] = []
         target_text = self._text(expression.left.sourceRange) or "<port connection>"
+        self._unmodeled = None
         self._lower_assignment(expression, (), assigns, span, text=f"{target_text} = {child}")
         self._port_value = None
         self._add_drivers(
-            assigns, EdgeType.COMBINATIONAL, ProcessKind.PORT, None, span, None, None
+            assigns,
+            EdgeType.COMBINATIONAL,
+            ProcessKind.PORT,
+            None,
+            span,
+            self._take_unmodeled(),
+            None,
         )
 
     def _lower_bidirectional_port(
@@ -892,16 +981,20 @@ class _Lowerer:
         if kind is ast.ProceduralBlockKind.AlwaysLatch:
             unsupported = "always_latch (latches are outside the MVP)"
         assigns: list[GuardedAssign] = []
-        self._delayed = False
-        self._called = None
+        self._unmodeled = None
         self._lower_statement(statement, (), assigns)
-        if unsupported is None and self._delayed:
-            unsupported = (
-                "intra-assignment timing control such as `q <= #1 d` (delays are outside the "
-                "MVP, so the value is not taken at the clock edge)"
-            )
+        unmodeled = self._take_unmodeled()
         if unsupported is None:
-            unsupported = self._call_reason()
+            unsupported = unmodeled
+        if (
+            unsupported is None
+            and timing.edge_type is EdgeType.COMBINATIONAL
+            and any(not assign.blocking for assign in assigns)
+        ):
+            unsupported = (
+                "nonblocking assignment in a combinational process (its value is applied after "
+                "the process runs, so later reads in the process see the old value)"
+            )
         if unsupported is None and timing.sensitivity is not None:
             missing = sorted(_process_reads(assigns) - timing.sensitivity)
             if missing:
@@ -942,13 +1035,28 @@ class _Lowerer:
             )
         edges = [event for event in events if event.edge in _EDGE_KINDS]
         if not edges:
-            # A level-sensitive list behaves as combinational logic only when it names
-            # every signal the process reads; the caller checks that once it is lowered.
+            # A level-sensitive list behaves as combinational logic only when every event
+            # is a plain signal and the list names every signal the process reads; the
+            # caller checks the second part once the process is lowered.
             sensitivity: set[str] = set()
             for event in events:
+                if event.iffCondition is not None:
+                    return _Timing(
+                        EdgeType.COMBINATIONAL,
+                        None,
+                        "iff-qualified event (the process does not wake while the qualifier "
+                        "is false, so its outputs can hold an earlier value)",
+                        None,
+                    )
                 waited = self._lower(event.expr)
-                if isinstance(waited, ir.SignalRef):
-                    sensitivity.add(waited.signal)
+                if not isinstance(waited, ir.SignalRef):
+                    return _Timing(
+                        EdgeType.COMBINATIONAL,
+                        None,
+                        "event on something other than a whole signal",
+                        None,
+                    )
+                sensitivity.add(waited.signal)
             return _Timing(EdgeType.COMBINATIONAL, None, None, None, frozenset(sensitivity))
         if len(events) > 1:
             return _Timing(
@@ -1019,6 +1127,7 @@ class _Lowerer:
             text = self._text(condition.sourceRange) or ir.to_sv(predicate)
             span = self._span(condition.sourceRange)
         else:
+            self._refuse("pattern or multi-clause `if` condition")
             self._diag(
                 "UNSUPPORTED_STATEMENT",
                 f"pattern or multi-clause condition at {self._where(statement.sourceRange.start)} "
@@ -1046,6 +1155,7 @@ class _Lowerer:
         span = self._span(statement.expr.sourceRange)
         flavor = _CASE_FLAVORS.get(statement.condition)
         if flavor is None:
+            self._refuse("`case ... inside`")
             self._diag(
                 "UNSUPPORTED_STATEMENT",
                 f"case-inside at {self._where(statement.sourceRange.start)} is not evaluated; "
@@ -1098,13 +1208,17 @@ class _Lowerer:
         self._lvalue = None
         where = self._where(assignment.sourceRange.start)
         if assignment.timingControl is not None:
-            self._delayed = True
+            self._refuse(
+                "intra-assignment timing control such as `q <= #1 d` (delays are outside the "
+                "MVP, so the value is not taken at the clock edge)"
+            )
             self._diag(
                 "UNSUPPORTED_STATEMENT",
                 f"intra-assignment timing control at {where} is not modeled; the process that "
                 "contains it is not traced.",
             )
         if targets is None:
+            self._refuse(f"assignment at {where} to something other than a signal of the module")
             self._diag(
                 "UNSUPPORTED_LVALUE",
                 f"assignment target at {where} is not a signal of the analyzed module; "
@@ -1227,10 +1341,13 @@ class _Lowerer:
         out: list[GuardedAssign],
     ) -> None:
         what = statement.kind.name
+        # Loops, task calls, waits, and every other statement outside the subset: the
+        # assignments found inside are kept for the structural graph only.
+        self._refuse(f"{what} statement (outside the modeled statement subset)")
         self._diag(
             "UNSUPPORTED_STATEMENT",
             f"{what} statement at {self._where(statement.sourceRange.start)} is not modeled; "
-            "assignments inside it are kept as unknown dependencies on every signal it reads.",
+            "the process that contains it is not traced.",
         )
         assignments: list[ast.AssignmentExpression] = []
         reads: dict[str, ir.Expr] = {}
@@ -1594,9 +1711,7 @@ class _Lowerer:
             arguments = list(expression.arguments)
             if expression.subroutineName in ("$signed", "$unsigned") and len(arguments) == 1:
                 return ir.Convert(width, signed, self._lower(arguments[0]))
-            if not expression.isSystemCall:
-                # The body may read signals that are not arguments; none of them is known.
-                self._called = self._called or expression.subroutineName
+            self._check_call(expression)
             return self._unsupported(expression, f"call to {expression.subroutineName}", width, signed)
         if isinstance(expression, ast.LValueReferenceExpression) and self._lvalue is not None:
             return self._lvalue
@@ -1634,6 +1749,10 @@ class _Lowerer:
             )
             return ir.Unsupported(width, signed, what, refs)
         what = f"reference to {symbol.kind.name} {symbol.name}"
+        # A value that is neither a constant nor a signal of this module (a local or
+        # automatic variable, a subroutine argument, another scope's signal) hides its
+        # own dependencies.
+        self._refuse(f"{what}, which is not a signal of the analyzed module")
         if not quiet:
             self._diag(
                 "UNSUPPORTED_EXPRESSION",
@@ -1808,14 +1927,36 @@ class _Lowerer:
             return self._unsupported(expression, "member access", width, signed)
         return ir.PartSelect(width, signed, value, offset, f".{member.name}")
 
-    def _call_reason(self) -> str | None:
-        """Why a driver that calls a user-defined subroutine cannot be traversed."""
-        if self._called is None:
-            return None
-        return (
-            f"call to the user-defined subroutine {self._called} (subroutine bodies are not "
-            "analyzed, so the signals it reads are not known)"
-        )
+    def _refuse(self, reason: str) -> None:
+        """Mark the process being lowered as outside the analyzed subset.
+
+        The subset is an allowlist: ``always_ff`` on one clock edge,
+        ``always_comb`` / ``always @*`` (or a complete plain event list) with
+        blocking assignments only, continuous assignments, ``if`` / ``case``
+        statements, and expressions over this module's signals, operators, and
+        the system functions in ``_PURE_SYSTEM_CALLS``. Anything else stops the
+        slice at the driver rather than being treated as understood.
+        """
+        if self._unmodeled is None:
+            self._unmodeled = reason
+
+    def _take_unmodeled(self) -> str | None:
+        """The reason recorded for the process just lowered, and reset it."""
+        reason, self._unmodeled = self._unmodeled, None
+        return reason
+
+    def _check_call(self, expression: ast.CallExpression) -> None:
+        name = expression.subroutineName
+        if not expression.isSystemCall:
+            self._refuse(
+                f"call to the user-defined subroutine {name} (subroutine bodies are not "
+                "analyzed, so the signals it reads and writes are not known)"
+            )
+        elif name not in _PURE_SYSTEM_CALLS:
+            self._refuse(
+                f"call to the system subroutine {name} (only functions of their arguments' "
+                "current values are modeled)"
+            )
 
     def _unsupported(
         self, expression: ast.Expression, what: str, width: int, signed: bool = False
@@ -1823,7 +1964,9 @@ class _Lowerer:
         operands: dict[str, ir.Expr] = {}
 
         def visit(node: object) -> None:
-            if isinstance(node, ast.NamedValueExpression):
+            if isinstance(node, ast.CallExpression):
+                self._check_call(node)
+            elif isinstance(node, ast.NamedValueExpression):
                 for ref in _signal_refs(self._lower_named(node, quiet=True)):
                     operands.setdefault(ref.signal, ref)
 
