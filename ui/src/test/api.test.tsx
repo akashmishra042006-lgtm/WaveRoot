@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { App } from "../App";
@@ -56,6 +56,25 @@ describe("the local service is optional", () => {
 });
 
 describe("running a benchmark", () => {
+  it("prevents duplicate jobs while creation is pending and recovers after refusal", async () => {
+    const user = userEvent.setup();
+    let reject!: (error: Error) => void;
+    const pending = new Promise<JobInfo>((_, no) => { reject = no; });
+    const client = fakeClient({createJob: vi.fn().mockReturnValueOnce(pending).mockResolvedValue(job("queued"))});
+    render(<App client={client} />);
+    const start = await screen.findByTestId("run-start");
+    await user.dblClick(start);
+    expect(client.createJob).toHaveBeenCalledTimes(1);
+    expect(start).toBeDisabled();
+    expect(screen.getByTestId("run-case")).toBeDisabled();
+    expect(screen.getByTestId("run-cancel")).toBeDisabled();
+    await act(async () => reject(new ApiError("try again", "refused", 503)));
+    expect(await screen.findByTestId("run-error")).toHaveTextContent("try again");
+    expect(start).toBeEnabled();
+    await user.click(start);
+    expect(client.createJob).toHaveBeenCalledTimes(2);
+  });
+
   it("creates a job, follows it, and opens the run record", async () => {
     const user = userEvent.setup();
     const client = fakeClient({
