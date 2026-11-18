@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -109,7 +110,7 @@ def processes_mentioning(fragment: str) -> list[str]:
 def test_process_probe_sees_long_command_lines(tmp_path: Path) -> None:
     """Guard for the helper itself: it must find a process by a long path."""
     marker = tmp_path / ("x" * 150)
-    probe = subprocess.Popen(["sh", "-c", f"sleep 30 # {marker}"])
+    probe = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)", str(marker)])
     try:
         time.sleep(0.2)
         assert processes_mentioning(str(marker)), "ps output is truncated"
@@ -312,3 +313,27 @@ class TestProcessOutcomes:
         assert isinstance(steps, list) and all(isinstance(s["argv"], list) for s in steps)
         hashes = data["inputs_sha256"]
         assert isinstance(hashes, dict) and set(hashes) == {"tb.sv", "s.stim"}
+
+
+@pytest.mark.usefixtures("exit_backend")
+@pytest.mark.parametrize("mode", ["success", "failure", "timeout", "cancel"])
+def test_exit_backends_without_simulator(mode: str, tmp_path: Path) -> None:
+    """Both detectors exercise real processes even without simulator tools."""
+    cancel = threading.Event()
+    if mode == "cancel":
+        cancel.set()
+    script = "import time; time.sleep(30)" if mode in ("timeout", "cancel") else (
+        "import sys; print('runner probe', flush=True); sys.exit(7)" if mode == "failure"
+        else "print('runner probe', flush=True)"
+    )
+    deadline = time.monotonic() + (0.15 if mode == "timeout" else 5)
+    result = Runner(tmp_path / "artifacts")._execute(
+        "probe", (sys.executable, "-c", script), tmp_path, deadline, cancel, None,
+    )
+    if mode in ("timeout", "cancel"):
+        assert result.outcome is not None
+        assert result.outcome[0] is (RunStatus.TIMEOUT if mode == "timeout" else RunStatus.CANCELLED)
+    else:
+        assert result.outcome is None
+        assert result.step.exit_code == (7 if mode == "failure" else 0)
+        assert "runner probe" in (tmp_path / result.step.log).read_text()

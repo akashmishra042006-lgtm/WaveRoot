@@ -28,6 +28,7 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -401,7 +402,7 @@ def _exited(proc: subprocess.Popen[bytes]) -> bool:
     whole group has died and the kernel has recycled the ID; PIDs are handed out
     sequentially, so that does not happen in practice.
     """
-    if _HAVE_WAITID:
+    if sys.platform == "linux" and _HAVE_WAITID:
         try:
             return os.waitid(os.P_PID, proc.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
         except ChildProcessError:

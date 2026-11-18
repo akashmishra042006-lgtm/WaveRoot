@@ -267,9 +267,8 @@ class TestCliEndToEnd:
         assert code == 1
         assert record["primary_mode"] == "cycle"
         failure = record["comparisons"]["cycle"]["failure"]
-        # Anchors use the trace's own hierarchy (Verilator adds TOP), spec 5.1.
-        assert record["run"]["trace_scope_prefix"] == "TOP."
-        assert failure["signal_path"] == "TOP.tb.dut.full"
+        # Anchors use the detected hierarchy; Verilator versions differ, spec 5.1.
+        assert failure["signal_path"] == record["run"]["trace_scope_prefix"] + "tb.dut.full"
         assert failure["observation"] == {"epoch": 0, "cycle": 3, "phase": "settled", "time_ps": "55000"}
         assert [d["code"] for d in record["diagnostics"]] == ["CAUSAL_UNAVAILABLE"]
         # The saved record re-validates and keeps the same exit code.
@@ -279,11 +278,12 @@ class TestCliEndToEnd:
     def test_fixture_report_for_another_hierarchy_is_refused(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """The mock report was authored for tb.dut.* paths; this Verilator
-        trace declares TOP.tb.dut.*. Attaching it would describe a different
-        trace, so it is refused and the run stays labeled as fixture mode."""
+        """A deliberately different hierarchy is refused on every simulator version."""
+        fixture = tmp_path / "other-hierarchy.json"
+        # Preserve the complete valid fixture but give it a distinct root scope.
+        fixture.write_text(MOCK_FIXTURE.read_text().replace("tb.dut", "other.dut"))
         code = cli.main(["analyze", str(FIFO_MANIFEST), "--variant", "mutant", "--schedule", "directed",
-                         "--artifacts", str(tmp_path), "--fixture-causal", str(MOCK_FIXTURE), "--json"])
+                         "--artifacts", str(tmp_path), "--fixture-causal", str(fixture), "--json"])
         record = json.loads(capsys.readouterr().out)
         assert code == 1
         assert record["fixture_mode"] is True
