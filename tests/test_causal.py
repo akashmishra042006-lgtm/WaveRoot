@@ -13,7 +13,9 @@ data, so nothing here compares against it. Only its trace and failure are used.
 from __future__ import annotations
 
 import hashlib
+import json
 import random
+import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -24,13 +26,19 @@ from pyslang import ast, syntax
 from src.causal import (
     DesignError,
     DesignGraph,
+    GraphFormatError,
     SliceOptions,
     analyze_comparison,
+    analyze_failure,
     build_design_graph,
+    dump_design_graph,
+    load_design_graph,
     slice_failure,
     synthesize_assertion,
+    verify_sources,
 )
 from src.causal import expr as ir
+from src.causal.graph_io import EXPR_CODECS
 from src.causal import fourstate as fs
 from src.causal.ast_graph import ProcessKind, SignalKind
 from src.causal.fourstate import CaseFlavor, Tri, Vec
@@ -329,8 +337,16 @@ def dut_provider(**overrides: str) -> MockWaveformProvider:
 _ATOMS = [
     "a", "b", "c", "s", "a[2:1]", "b[3]", "a[k]", "b[k[0] +: 2]", "b[k -: 2]", "c[2 -: 2]",
     "4'd3", "4'b1x0z", "2'sb11", "3'sd2", "$signed(a)", "$unsigned(c)", "{a, s}", "{2{s}}",
-    "1'b1", "8'hf0", "4'sb1001",
+    "1'b1", "8'hf0", "4'sb1001", "m[k]", "m[2]", "m[k ^ 2'd3]", "ps.hi", "ps.lo", "ps.lo[3:1]",
 ]  # fmt: skip
+_ARRAY = ("m", "logic [3:0]", 4, 4)
+"""An unpacked array operand: name, element type, element width, element count."""
+_PACKAGE = (
+    "package evp;\n"
+    "  typedef struct packed { logic [2:0] hi; logic [4:0] lo; } pair_t;\n"
+    "endpackage\n"
+)
+"""A packed struct with uneven fields, so field offsets are not symmetric."""
 _BINARY = [
     "+", "-", "*", "/", "%", "&", "|", "^", "~^", "==", "!=", "===", "!==", "==?", "!=?",
     "<", "<=", ">", ">=", "&&", "||", "<<", ">>", "<<<", ">>>", "**", "->", "<->",
@@ -342,7 +358,37 @@ _OPERANDS = [
     ("c", "logic signed [3:0]", 4, "s"),
     ("s", "logic [1:0]", 2, ""),
     ("k", "logic [1:0]", 2, ""),
+    ("ps", "evp::pair_t", 8, ""),
 ]
+
+
+def _operand_ports() -> str:
+    array, element_type, _, count = _ARRAY
+    ports = ", ".join(f"input {type_} {name}" for name, type_, _, _ in _OPERANDS)
+    return f"{ports}, input {element_type} {array} [{count}]"
+
+
+def _operand_values(rng: random.Random, trial: int) -> tuple[dict[str, str], str]:
+    """Random four-state operand values, and ``localparam`` text giving them to slang.
+
+    The first trials use known bits only; ``k`` is always known because slang
+    rejects an unknown index in a constant expression.
+    """
+
+    def bits(width: int, known: bool) -> str:
+        return "".join(rng.choice("01" if known or rng.random() < 0.6 else "01xz") for _ in range(width))
+
+    values = {name: bits(width, trial < 5 or name == "k") for name, _, width, _ in _OPERANDS}
+    array, element_type, element_width, count = _ARRAY
+    elements = [bits(element_width, trial < 5) for _ in range(count)]
+    values.update({f"{array}[{index}]": value for index, value in enumerate(elements)})
+    params = "".join(
+        f"  localparam {type_} {name} = {width}'{sign}b{values[name]};\n"
+        for name, type_, width, sign in _OPERANDS
+    )
+    pattern = ", ".join(f"{element_width}'b{value}" for value in elements)
+    params += f"  localparam {element_type} {array} [{count}] = '{{{pattern}}};\n"
+    return values, params
 
 
 def _random_expression(rng: random.Random, depth: int) -> str:
@@ -384,7 +430,9 @@ def test_evaluator_agrees_with_slang_constant_evaluation(tmp_path: Path, seed: i
     statements and evaluated by this package. The same expressions, with the
     operands replaced by literals, are evaluated by slang as ``localparam``
     values. Select indices stay known because slang rejects an ``x`` index in a
-    constant expression; that case has its own test below.
+    constant expression; that case has its own test below. The unpacked array
+    ``m`` is read through element signals ``m[0]`` .. ``m[3]``, and ``ps`` is a
+    packed struct read through its fields.
 
     slang is the oracle here, not the standard. In one known case they differ:
     slang 12.1 gives ``z`` for ``x ? z : z``, where IEEE 1800 Table 11-20 and
@@ -394,35 +442,69 @@ def test_evaluator_agrees_with_slang_constant_evaluation(tmp_path: Path, seed: i
     """
     rng = random.Random(seed)
     expressions = [_random_expression(rng, 3) for _ in range(80)]
-    ports = ", ".join(f"input {type_} {name}" for name, type_, _, _ in _OPERANDS)
     outputs = "".join(f", output logic [7:0] y{i}" for i in range(len(expressions)))
     assigns = "".join(f"  assign y{i} = {text};\n" for i, text in enumerate(expressions))
-    design = build(tmp_path, f"module ev({ports}{outputs});\n{assigns}endmodule\n", "ev.sv")
+    source = f"{_PACKAGE}module ev({_operand_ports()}{outputs});\n{assigns}endmodule\n"
+    design = build(tmp_path, source, "ev.sv")
     assert not design.diagnostics, "every generated construct must be supported"
 
     checked = 0
     for trial in range(20):
-        values = {
-            name: "".join(
-                rng.choice("01" if trial < 5 or name == "k" or rng.random() < 0.6 else "01xz")
-                for _ in range(width)
-            )
-            for name, _, width, _ in _OPERANDS
-        }
-        params = "".join(
-            f"  localparam {type_} {name} = {width}'{sign}b{values[name]};\n"
-            for name, type_, width, sign in _OPERANDS
-        )
+        values, params = _operand_values(rng, trial)
         results = "".join(
             f"  localparam logic [7:0] y{i} = {text};\n" for i, text in enumerate(expressions)
         )
-        expected = _slang_constants(f"module oracle;\n{params}{results}endmodule\n")
+        expected = _slang_constants(f"{_PACKAGE}module oracle;\n{params}{results}endmodule\n")
         for i, text in enumerate(expressions):
             rhs = design.drivers[f"y{i}"][0].assigns[0].rhs
             got = ir.evaluate(rhs, lambda signal: Vec(values[signal])).bits
             assert got == expected[f"y{i}"], f"{text} with {values}"
             checked += 1
     assert checked == 1600
+
+
+def test_part_select_and_field_writes_place_bits_like_slang(tmp_path: Path) -> None:
+    """Differential test of the bit range a partial write records.
+
+    Each wire is written in two parts, by part-selects or by packed struct
+    fields. The parts this package evaluates, placed at the offsets recorded
+    in ``GuardedAssign.written``, must equal slang's value of the whole.
+    """
+    rng = random.Random(3)
+    count = 30
+    pairs = [(_random_expression(rng, 2), _random_expression(rng, 2)) for _ in range(count)]
+    lines = []
+    for i, (first, second) in enumerate(pairs):
+        lines.append(f"  wire [7:0] w{i};\n  assign w{i}[7:3] = {first};\n")
+        lines.append(f"  assign w{i}[2:0] = {second};\n")
+        lines.append(f"  wire evp::pair_t p{i};\n  assign p{i}.lo = {first};\n")
+        lines.append(f"  assign p{i}.hi = {second};\n")
+    source = f"{_PACKAGE}module pw({_operand_ports()});\n{''.join(lines)}endmodule\n"
+    design = build(tmp_path, source, "pw.sv")
+    assert not design.diagnostics
+
+    for trial in range(10):
+        values, params = _operand_values(rng, trial)
+        results = "".join(
+            f"  localparam logic [4:0] yh{i} = {first};\n"
+            f"  localparam logic [2:0] yl{i} = {second};\n"
+            f"  localparam logic [4:0] ylo{i} = {first};\n"
+            f"  localparam logic [2:0] yhi{i} = {second};\n"
+            for i, (first, second) in enumerate(pairs)
+        )
+        expected = _slang_constants(f"{_PACKAGE}module oracle;\n{params}{results}endmodule\n")
+        for i in range(count):
+            for name, whole in ((f"w{i}", expected[f"yh{i}"] + expected[f"yl{i}"]),
+                                (f"p{i}", expected[f"yhi{i}"] + expected[f"ylo{i}"])):  # fmt: skip
+                placed = ["?"] * 8
+                for driver in design.drivers[name]:
+                    (assign,) = driver.assigns
+                    assert assign.written is not None and not assign.full_write
+                    offset, width = assign.written
+                    got = ir.evaluate(assign.rhs, lambda signal: Vec(values[signal])).bits
+                    assert len(got) == width
+                    placed[offset : offset + width] = got
+                assert "".join(placed) == whole, f"{name} with {values}"
 
 
 def test_unknown_select_index_yields_unknown_bits(tmp_path: Path) -> None:
@@ -495,7 +577,16 @@ def test_fifo_signals_carry_widths_ranges_and_declaration_lines(fifo_design: Des
     )
     assert wptr.span is not None and wptr.span.line == 16
     assert signals["in_data"].bit_range == BitRange(left=7, right=0)
-    assert signals["mem"].is_aggregate
+    # `logic [7:0] mem [4]` is declared element by element.
+    assert "mem" not in signals
+    for index in range(4):
+        element = signals[f"mem[{index}]"]
+        assert (element.width, element.bit_range, element.is_aggregate) == (
+            8,
+            BitRange(left=7, right=0),
+            False,
+        )
+        assert element.span is not None and element.span.line == 18
 
 
 def test_fifo_register_driver_records_clock_guards_and_exact_lines(
@@ -539,14 +630,17 @@ def test_fifo_structural_edges_label_type_and_role(fifo_design: DesignGraph) -> 
     }
     # The array read index and the array write index are selectors, not data.
     assert labels("rptr", "out_data") == {(EdgeType.COMBINATIONAL, EdgeRole.CONTROL)}
-    assert labels("wptr", "mem") == {(EdgeType.SEQUENTIAL, EdgeRole.CONTROL)}
-    assert labels("in_data", "mem") == {(EdgeType.SEQUENTIAL, EdgeRole.DATA)}
+    elements = [f"mem[{index}]" for index in range(4)]
+    for element in elements:
+        assert labels(element, "out_data") == {(EdgeType.COMBINATIONAL, EdgeRole.DATA)}
+        assert labels("wptr", element) == {(EdgeType.SEQUENTIAL, EdgeRole.CONTROL)}
+        assert labels("in_data", element) == {(EdgeType.SEQUENTIAL, EdgeRole.DATA)}
     assert labels("clk", "wptr") == set()
 
     sequential_targets = {
         edge.target for edge in fifo_design.edges if edge.edge_type is EdgeType.SEQUENTIAL
     }
-    assert sequential_targets == {"wptr", "rptr", "mem"}
+    assert sequential_targets == {"wptr", "rptr", *elements}
     wrap_data = [
         edge
         for edge in fifo_design.fanin("wptr")
@@ -608,10 +702,12 @@ def test_always_forms_are_classified_by_their_event_control(tmp_path: Path) -> N
 def test_unsupported_constructs_are_reported_and_never_dropped(tmp_path: Path) -> None:
     design = build(
         tmp_path,
-        "module sub(input logic i, output logic o);\n  assign o = ~i;\nendmodule\n"
+        "module sub(input logic i, output logic o, inout wire io);\n  assign o = ~i;\n"
+        "endmodule\n"
         "module top(input logic clk, rst_n, en, input logic [3:0] a,\n"
-        "           output logic [3:0] cnt, loop, output logic q, lat, inst_out);\n"
-        "  sub u_sub(.i(a[0]), .o(inst_out));\n"
+        "           output logic [3:0] cnt, loop, output logic q, lat, inst_out,\n"
+        "           inout wire bus);\n"
+        "  sub u_sub(.i(a[0]), .o(inst_out), .io(bus));\n"
         "  always_ff @(posedge clk or negedge rst_n)\n"
         "    if (!rst_n) q <= 1'b0; else q <= a[0];\n"
         "  always_ff @(posedge clk) cnt += 4'd1;\n"
@@ -621,9 +717,13 @@ def test_unsupported_constructs_are_reported_and_never_dropped(tmp_path: Path) -
         "top.sv",
     )
     reported = {diagnostic.code for diagnostic in design.diagnostics}
-    assert {"UNSUPPORTED_INSTANCE", "UNSUPPORTED_STATEMENT"} <= reported
+    assert {"UNSUPPORTED_PORT", "UNSUPPORTED_STATEMENT"} <= reported
+    # The instance itself is traversed: its output port is an ordinary driver.
+    (port,) = design.drivers["inst_out"]
+    assert port.process is ProcessKind.PORT and port.unsupported is None
     for signal, fragment in [
-        ("inst_out", "instance u_sub"),
+        ("bus", "bidirectional ports are not traced"),
+        ("u_sub.io", "bidirectional ports are not traced"),
         ("q", "asynchronous reset"),
         ("cnt", "blocking assignment"),
         ("lat", "always_latch"),
@@ -854,22 +954,487 @@ def test_fifo_waveform_window_covers_the_slice(fifo_report: CausalReport) -> Non
     assert paths[0] == "tb.dut.clk" and "tb.dut.wptr" in paths and "tb.dut.mem" not in paths
 
 
-def test_unobserved_array_is_reported_and_its_writes_are_kept(
-    fifo_provider: MockWaveformProvider, fifo_design: DesignGraph
+# --------------------------------------------------------------------------
+# Unpacked arrays (B-02)
+# --------------------------------------------------------------------------
+
+# The fifth write, at cycle 4, wraps to mem[0] and overwrites the first word.
+OUT_DATA_FAILURE = failure_at("out_data", 4, 65000, actual="01010101", expected="00010001")
+
+
+def with_memory(trace: MockTrace) -> MockWaveformProvider:
+    """The mock FIFO trace extended, in this test only, with ``tb.dut.mem[0..3]``.
+
+    The values follow the RTL: each push stores ``in_data`` in
+    ``mem[wptr[1:0]]``. The shared fixture is not changed.
+    """
+    words = {
+        0: [(0, "xxxxxxxx"), (25000, "00010001"), (65000, "01010101")],
+        1: [(0, "xxxxxxxx"), (35000, "00100010")],
+        2: [(0, "xxxxxxxx"), (45000, "00110011")],
+        3: [(0, "xxxxxxxx"), (55000, "01000100")],
+    }
+    memory = tuple(
+        MockSignal(
+            decl=SignalDecl(path=f"{SCOPE}.mem[{index}]", width=8, bit_range=BitRange(left=7, right=0)),
+            samples=tuple(SignalSample(time_ps=time, value=lv(bits)) for time, bits in samples),
+        )
+        for index, samples in words.items()
+    )
+    return MockWaveformProvider(
+        MockTrace(
+            coverage=trace.coverage,
+            unavailable=trace.unavailable,
+            signals=(*trace.signals, *memory),
+        )
+    )
+
+
+def edge_structure(report: CausalReport) -> set[tuple[object, ...]]:
+    """Edges by signal and observation, ignoring node ids, values, and reasons."""
+    where = {n.id: (n.signal_path, n.observation.cycle, n.observation.phase) for n in report.nodes}
+    return {
+        (where[e.source], where[e.target], e.edge_type, e.role, e.branch) for e in report.edges
+    }
+
+
+def test_indexed_read_keeps_only_the_selected_element_and_reaches_its_write(
+    fifo: MockFixture, fifo_design: DesignGraph
 ) -> None:
-    failure = failure_at("out_data", 4, 65000, actual="01010101", expected="00100010")
-    report = slice_failure(failure, fifo_provider, fifo_design, OPTIONS)
-    assert {"SIGNAL_NOT_OBSERVED", "UNSUPPORTED_OPERAND"} <= codes(report)
-    memory = node_of(report, "mem", 4, SETTLED)
-    assert memory.value is None
-    (read,) = edges_of(report, ("mem", 4, SETTLED), ("out_data", 4, SETTLED))
-    assert (read.role, read.branch) == (EdgeRole.DATA, BranchStatus.RETAINED)
-    (index,) = edges_of(report, ("rptr", 4, SETTLED), ("out_data", 4, SETTLED))
-    assert index.role is EdgeRole.CONTROL
-    # The element written is not resolved, so the write and the hold are both kept.
-    write = edges_of(report, ("in_data", 4, BEFORE), ("mem", 4, SETTLED), EdgeRole.DATA)
-    hold = edges_of(report, ("mem", 4, BEFORE), ("mem", 4, SETTLED), EdgeRole.DATA)
-    assert branches(write) == branches(hold) == {BranchStatus.RETAINED}
+    report = slice_failure(OUT_DATA_FAILURE, with_memory(fifo.trace), fifo_design, OPTIONS)
+    assert not report.truncated and codes(report) == set()
+    assert CausalReport.model_validate_json(report.model_dump_json()) == report
+
+    out = ("out_data", 4, SETTLED)
+    (selected,) = edges_of(report, ("mem[0]", 4, SETTLED), out)
+    assert (selected.role, selected.branch) == (EdgeRole.DATA, BranchStatus.RETAINED)
+    targets = {edge.target for edge in report.edges}
+    for index in (1, 2, 3):
+        (other,) = edges_of(report, (f"mem[{index}]", 4, SETTLED), out)
+        assert other.branch is BranchStatus.PRUNED
+        assert f"the index `rptr[1:0]` is not {index}" in other.reason
+        # An unselected element is shown with its value, but its writes are not explored.
+        unselected = node_of(report, f"mem[{index}]", 4, SETTLED)
+        assert unselected.value is not None and unselected.id not in targets
+
+    # The slice reaches in_data at the cycle whose wptr addressed mem[0].
+    element = ("mem[0]", 4, SETTLED)
+    (write,) = edges_of(report, ("in_data", 4, BEFORE), element)
+    assert (write.edge_type, write.role, write.branch) == (
+        EdgeType.SEQUENTIAL,
+        EdgeRole.DATA,
+        BranchStatus.RETAINED,
+    )
+    assert node_of(report, "in_data", 4, BEFORE).value == lv("01010101")
+    (index,) = edges_of(report, ("wptr", 4, BEFORE), element)
+    assert (index.role, index.branch) == (EdgeRole.CONTROL, BranchStatus.RETAINED)
+    assert "Index `wptr[1:0]` is 2'b00" in index.reason
+    assert node_of(report, "wptr", 4, BEFORE).value == lv("000")
+    # A definite write has no hold edge, so mem[0] before the edge is not in the graph.
+    assert not [
+        node
+        for node in report.nodes
+        if node.signal_path == "tb.dut.mem[0]" and node.observation.phase is BEFORE
+    ]
+
+    # The write to mem[0] only copies in_data, so it ranks after the logic that computed
+    # where it went: the wrap assignment that sent it to mem[0] is in the top two.
+    lines = [s.location.line for s in report.suspects if s.location is not None]
+    assert 38 in lines[:2], lines
+    element = node_of(report, "mem[0]", 4, SETTLED).id
+    write = next(s for s in report.suspects if s.node_id == element)
+    assert write.location is not None and write.location.line == 36
+    assert "changed tb.dut.mem[0] from 8'b00010001 to 8'b01010101" in write.reason
+    assert lines.index(36) > lines.index(38)
+
+
+def test_elements_missing_from_the_trace_are_reported_and_prune_nothing(
+    fifo: MockFixture, fifo_provider: MockWaveformProvider, fifo_design: DesignGraph
+) -> None:
+    missing = slice_failure(OUT_DATA_FAILURE, fifo_provider, fifo_design, OPTIONS)
+    observed = slice_failure(OUT_DATA_FAILURE, with_memory(fifo.trace), fifo_design, OPTIONS)
+    # Only the missing elements are reported (the candidate assertion may also say it
+    # cannot constrain one, depending on which suspect ranks first).
+    assert codes(missing) - {"SVA_OPERAND_NOT_OBSERVED"} == {"SIGNAL_NOT_OBSERVED"}
+    messages = [d.message for d in missing.diagnostics if d.code == "SIGNAL_NOT_OBSERVED"]
+    assert any("tb.dut.mem[0]" in message for message in messages)
+    assert node_of(missing, "mem[0]", 4, SETTLED).value is None
+    # Element values never decide anything here, so the graph is the same either way.
+    assert edge_structure(missing) == edge_structure(observed)
+    assert CausalReport.model_validate_json(missing.model_dump_json()) == missing
+
+
+ARRAY_SV = """\
+module rd (input logic clk, input logic we, input logic [1:0] w, k,
+           input logic [3:0] d, output logic [3:0] y);
+  logic [3:0] mem [4];
+  always_ff @(posedge clk) if (we) mem[w] <= d;
+  assign y = mem[k];
+endmodule
+"""
+
+ARRAY_VALUES = {
+    "we": "1", "w": "10", "k": "01", "d": "0110", "y": "0011",
+    "mem[0]": "0001", "mem[1]": "0011", "mem[2]": "0110", "mem[3]": "1111",
+}  # fmt: skip
+
+
+def test_unknown_read_index_keeps_every_element_as_unknown(tmp_path: Path) -> None:
+    design = build(tmp_path, ARRAY_SV)
+    provider = static_provider({**ARRAY_VALUES, "k": "x1", "y": "xxxx"})
+    report = slice_failure(
+        failure_at("y", 2, 25000, actual="xxxx", expected="0011"), provider, design, OPTIONS
+    )
+    y = ("y", 2, SETTLED)
+    for index in range(4):
+        (read,) = edges_of(report, (f"mem[{index}]", 2, SETTLED), y)
+        assert read.branch is BranchStatus.UNKNOWN and "every element is kept" in read.reason
+    (selector,) = edges_of(report, ("k", 2, SETTLED), y)
+    assert selector.role is EdgeRole.CONTROL
+    y_id = node_of(report, *y).id
+    assert not any(e.branch is BranchStatus.PRUNED for e in report.edges if e.target == y_id)
+    assert CausalReport.model_validate_json(report.model_dump_json()) == report
+
+
+def test_unknown_write_index_keeps_the_write_and_the_hold_of_every_element(
+    tmp_path: Path,
+) -> None:
+    design = build(tmp_path, ARRAY_SV)
+    provider = static_provider({**ARRAY_VALUES, "w": "x0", "k": "xx", "y": "xxxx"})
+    report = slice_failure(
+        failure_at("y", 2, 25000, actual="xxxx", expected="0011"), provider, design, OPTIONS
+    )
+    for index in range(4):
+        element = (f"mem[{index}]", 2, SETTLED)
+        (write,) = edges_of(report, ("d", 2, BEFORE), element)
+        (hold,) = edges_of(report, (f"mem[{index}]", 2, BEFORE), element)
+        assert write.branch is hold.branch is BranchStatus.UNKNOWN
+        assert "may hold" in hold.reason
+        (selector,) = edges_of(report, ("w", 2, BEFORE), element)
+        assert (selector.role, selector.branch) == (EdgeRole.CONTROL, BranchStatus.UNKNOWN)
+    assert CausalReport.model_validate_json(report.model_dump_json()) == report
+
+
+def test_array_reads_and_writes_lower_to_element_signals(tmp_path: Path) -> None:
+    design = build(
+        tmp_path,
+        "module arr (input logic clk, input logic [1:0] i, j, input logic [3:0] d,\n"
+        "            output logic [3:0] y, g, t, c);\n"
+        "  logic [3:0] mem [3];\n"
+        "  logic [3:0] grid [2][3];\n"
+        "  logic [3:0] down [7:4];\n"
+        "  always_ff @(posedge clk) begin\n"
+        "    mem[i] <= d;\n"
+        "    grid[i[0]][j] <= d;\n"
+        "    down[5] <= d;\n"
+        "  end\n"
+        "  assign y = mem[i];\n"
+        "  assign g = grid[1][j];\n"
+        "  assign t = down[i + 4];\n"
+        "  assign c = down[6];\n"
+        "endmodule\n",
+    )
+    assert not design.diagnostics
+    names = set(design.signals)
+    assert {"mem[0]", "mem[1]", "mem[2]", "down[7]", "down[4]", "grid[1][2]"} <= names
+    assert not {"mem", "grid", "down", "mem[3]"} & names
+
+    def value(signal: str, **operands: str) -> str:
+        rhs = design.drivers[signal][0].assigns[0].rhs
+        values = {f"mem[{n}]": f"{n:04b}" for n in range(3)}
+        values.update({f"grid[{a}][{b}]": f"1{a}{b % 2}{b // 2}" for a in range(2) for b in range(3)})
+        values.update({f"down[{n}]": f"{n:04b}" for n in range(4, 8)})
+        values.update({name: bits for name, bits in operands.items()})
+        return ir.evaluate(rhs, lambda signal: Vec(values[signal]) if signal in values else None).bits
+
+    assert value("y", i="01") == "0001"
+    assert value("y", i="11") == "xxxx", "an out-of-range index reads x"
+    assert value("y", i="x0") == "xxxx", "an unknown index reads x"
+    assert value("g", j="10") == "1101"
+    assert value("t", i="01") == "0101"
+    assert isinstance(design.drivers["c"][0].assigns[0].rhs, ir.SignalRef)
+    assert value("c") == "0110"
+
+    # A run-time index makes every element a target under an index guard.
+    for n in range(3):
+        (driver,) = design.drivers[f"mem[{n}]"]
+        (assign,) = driver.assigns
+        assert assign.full_write and assign.index_operands == ()
+        assert [ir.describe_guard(guard) for guard in assign.guards] == [f"i == {n}"]
+    (cell,) = design.drivers["grid[0][2]"][0].assigns
+    assert [ir.describe_guard(guard) for guard in cell.guards] == ["i[0] == 0", "j == 2"]
+    # A constant index writes one element with no guard.
+    (fixed,) = design.drivers["down[5]"][0].assigns
+    assert fixed.full_write and fixed.guards == ()
+    assert "down[4]" not in design.drivers and "down[6]" not in design.drivers
+
+
+def test_array_beyond_the_element_limit_stays_aggregate(tmp_path: Path) -> None:
+    design = build(
+        tmp_path,
+        "module big (input logic clk, input logic [12:0] a, input logic [7:0] d,\n"
+        "            output logic [7:0] y, z);\n"
+        "  logic [7:0] mem [5000];\n"
+        "  logic [7:0] neg [-2:1];\n"
+        "  always_ff @(posedge clk) mem[a] <= d;\n"
+        "  assign y = mem[a];\n"
+        "  assign z = neg[0];\n"
+        "endmodule\n",
+    )
+    messages = [d.message for d in design.diagnostics if d.code == "ARRAY_NOT_EXPANDED"]
+    assert len(messages) == 2
+    assert any("5000 elements, more than the limit of 4096" in m for m in messages)
+    assert any("negative index" in m for m in messages)
+    assert design.signals["mem"].is_aggregate and "mem[0]" not in design.signals
+    assert isinstance(design.drivers["y"][0].assigns[0].rhs, ir.ArrayElement)
+    (write,) = design.drivers["mem"][0].assigns
+    assert not write.full_write, "a write into an aggregate array is partial"
+
+
+# --------------------------------------------------------------------------
+# Structs and bit-precise partial writes (B-03)
+# --------------------------------------------------------------------------
+
+PACKED_SV = """\
+module ps (input logic clk, input logic en_hi, en_lo, input logic [3:0] a, b,
+           output logic [3:0] y, w);
+  typedef struct packed { logic [3:0] hi; logic [3:0] lo; } pair_t;
+  pair_t s;
+  logic [3:0] t;
+  always_ff @(posedge clk) begin
+    if (en_hi) s.hi <= a;
+    if (en_lo) s.lo <= b;
+  end
+  assign y = s.hi;
+  assign t = s.lo;
+  assign w = s.hi ^ t;
+endmodule
+"""
+
+
+def packed_provider() -> MockWaveformProvider:
+    return static_provider(
+        {"en_hi": "1", "en_lo": "1", "a": "1010", "b": "0101"},
+        changing={
+            "s": [(0, "00000000"), (25000, "10100101")],
+            "y": [(0, "0000"), (25000, "1010")],
+            "t": [(0, "0000"), (25000, "0101")],
+            "w": [(0, "0000"), (25000, "1111")],
+        },
+    )
+
+
+def test_field_consumer_does_not_retain_the_other_fields_write(tmp_path: Path) -> None:
+    design = build(tmp_path, PACKED_SV)
+    report = slice_failure(
+        failure_at("y", 2, 25000, actual="1010", expected="0000"), packed_provider(), design, OPTIONS
+    )
+    assert not report.truncated and codes(report) == set()
+    s = ("s", 2, SETTLED)
+    (taken,) = edges_of(report, ("a", 2, BEFORE), s)
+    assert (taken.edge_type, taken.branch) == (EdgeType.SEQUENTIAL, BranchStatus.RETAINED)
+    (other,) = edges_of(report, ("b", 2, BEFORE), s)
+    assert other.branch is BranchStatus.PRUNED
+    assert "`s.lo <= b` writes only bits [3:0] of tb.dut.s; the slice follows bits [7:4]" in (
+        other.reason
+    )
+    (enable,) = edges_of(report, ("en_lo", 2, BEFORE), s)
+    assert enable.branch is BranchStatus.PRUNED and "does not affect" in enable.reason
+    (needed,) = edges_of(report, ("en_hi", 2, BEFORE), s)
+    assert needed.branch is BranchStatus.RETAINED
+    # hi is written at this edge, so no bit the slice follows holds.
+    assert not [n for n in report.nodes if n.signal_path == "tb.dut.s" and n.observation.phase is BEFORE]
+    lo_write_line = 8
+    assert all(
+        suspect.location is None or suspect.location.line != lo_write_line
+        for suspect in report.suspects
+    )
+    assert CausalReport.model_validate_json(report.model_dump_json()) == report
+
+
+def test_node_reached_again_for_more_bits_is_expanded_again(tmp_path: Path) -> None:
+    """w reads s.hi directly and s.lo through t, so the demand on s grows after its expansion."""
+    design = build(tmp_path, PACKED_SV)
+    report = slice_failure(
+        failure_at("w", 2, 25000, actual="1111", expected="0000"), packed_provider(), design, OPTIONS
+    )
+    assert not report.truncated and codes(report) == set()
+    s = ("s", 2, SETTLED)
+    for operand in ("a", "b", "en_hi", "en_lo"):
+        found = edges_of(report, (operand, 2, BEFORE), s)
+        assert branches(found) == {BranchStatus.RETAINED}, operand
+    # Expanding again replaced the earlier edges instead of adding beside them.
+    targets = [edge for edge in report.edges if edge.target == node_of(report, *s).id]
+    assert len(targets) == len({(e.source, e.role, e.branch) for e in targets})
+    assert CausalReport.model_validate_json(report.model_dump_json()) == report
+
+
+PARTIAL_SV = """\
+module pw (input logic clk, en, input logic [3:0] a, b, input logic [7:0] c,
+           output logic [7:0] q, r, t, u);
+  always_ff @(posedge clk) begin
+    q[7:4] <= a;
+    q[3:0] <= b;
+    if (en) r[7:4] <= a;
+    t <= c;
+    t[3:0] <= b;
+    u[7:4] <= a;
+    u <= c;
+  end
+endmodule
+"""
+
+
+def partial_provider() -> MockWaveformProvider:
+    return static_provider(
+        {
+            "en": "1", "a": "1010", "b": "0101", "c": "11110000",
+            "q": "10100101", "r": "10100000", "t": "11110101", "u": "11110000",
+        }  # fmt: skip
+    )
+
+
+def hold_nodes(report: CausalReport, signal: str) -> list[CausalNode]:
+    return [
+        node
+        for node in report.nodes
+        if node.signal_path == f"{SCOPE}.{signal}" and node.observation.phase is BEFORE
+    ]
+
+
+def test_partial_writes_that_cover_the_signal_remove_the_hold(tmp_path: Path) -> None:
+    design = build(tmp_path, PARTIAL_SV)
+    q = slice_failure(
+        failure_at("q", 2, 25000, actual="10100101", expected="0"*8), partial_provider(), design, OPTIONS
+    )
+    assert branches(edges_of(q, ("a", 2, BEFORE), ("q", 2, SETTLED))) == {BranchStatus.RETAINED}
+    assert branches(edges_of(q, ("b", 2, BEFORE), ("q", 2, SETTLED))) == {BranchStatus.RETAINED}
+    assert not hold_nodes(q, "q"), "two halves cover q, so nothing holds"
+
+    # A full write followed by a partial one also leaves nothing to hold.
+    t = slice_failure(
+        failure_at("t", 2, 25000, actual="11110101", expected="0"*8), partial_provider(), design, OPTIONS
+    )
+    assert branches(edges_of(t, ("c", 2, BEFORE), ("t", 2, SETTLED))) == {BranchStatus.RETAINED}
+    assert not hold_nodes(t, "t")
+    assert CausalReport.model_validate_json(q.model_dump_json()) == q
+
+
+def test_one_partial_write_keeps_the_hold_for_the_other_bits(tmp_path: Path) -> None:
+    design = build(tmp_path, PARTIAL_SV)
+    report = slice_failure(
+        failure_at("r", 2, 25000, actual="10100000", expected="0"*8), partial_provider(), design, OPTIONS
+    )
+    r = ("r", 2, SETTLED)
+    (write,) = edges_of(report, ("a", 2, BEFORE), r)
+    assert write.branch is BranchStatus.RETAINED
+    (hold,) = edges_of(report, ("r", 2, BEFORE), r)
+    assert hold.branch is BranchStatus.RETAINED
+    assert "Bits [3:0] of tb.dut.r are not written at the cycle 2 clock edge" in hold.reason
+    # The held low half carries back; the write of the high half does not stop the skip.
+    (carry,) = edges_of(report, ("r", 0, SETTLED), ("r", 2, BEFORE))
+    assert carry.reason.startswith("Carry")
+    assert CausalReport.model_validate_json(report.model_dump_json()) == report
+
+
+def test_full_write_after_a_partial_one_overwrites_it(tmp_path: Path) -> None:
+    design = build(tmp_path, PARTIAL_SV)
+    report = slice_failure(
+        failure_at("u", 2, 25000, actual="11110000", expected="0"*8), partial_provider(), design, OPTIONS
+    )
+    (early,) = edges_of(report, ("a", 2, BEFORE), ("u", 2, SETTLED))
+    assert early.branch is BranchStatus.PRUNED
+    assert "`u[7:4] <= a` is overwritten by the later assignment `u <= c`" in early.reason
+    assert not hold_nodes(report, "u")
+
+
+def test_written_bit_ranges_are_recorded_for_selects_fields_and_unions(tmp_path: Path) -> None:
+    design = build(
+        tmp_path,
+        "module wr (input logic clk, input logic [2:0] k, input logic [3:0] a,\n"
+        "           output logic [7:0] y);\n"
+        "  typedef struct packed { logic [3:0] hi; logic [3:0] lo; } pair_t;\n"
+        "  typedef union packed { logic [7:0] w; pair_t p; } un_t;\n"
+        "  logic [7:0] q, v;\n"
+        "  logic [0:7] asc;\n"
+        "  pair_t s;\n"
+        "  un_t u;\n"
+        "  always_ff @(posedge clk) begin\n"
+        "    q[3:0] <= a;\n"
+        "    q[k] <= a[0];\n"
+        "    v[5 -: 2] <= a[1:0];\n"
+        "    v[0 +: 2] <= a[1:0];\n"
+        "    asc[2:3] <= a[1:0];\n"
+        "    s.hi <= a;\n"
+        "    u.p.lo <= a;\n"
+        "  end\n"
+        "  assign y = q ^ v ^ asc ^ s ^ u;\n"
+        "endmodule\n",
+    )
+
+    def written(signal: str) -> list[tuple[int, int] | None]:
+        (driver,) = design.drivers[signal]
+        return [assign.written for assign in driver.assigns]
+
+    assert written("q") == [(4, 4), None], "a run-time index has no fixed bit range"
+    assert written("v") == [(2, 2), (6, 2)]
+    assert written("asc") == [(2, 2)]
+    assert written("s") == [(0, 4)]
+    assert written("u") == [(4, 4)], "a union member write overlaps the low bits"
+
+
+STRUCT_SV = """\
+module us (input logic [3:0] a, b, output logic [3:0] y, output logic [1:0] z);
+  typedef struct { logic [3:0] f; logic [3:0] g; } rec_t;
+  typedef struct { logic [1:0] arr [2]; logic h; } in_t;
+  typedef struct { in_t inner; logic [3:0] k; } out_t;
+  rec_t s, t;
+  out_t o, p;
+  assign s = '{f: a, g: b};
+  assign t = s;
+  assign y = t.g;
+  assign o = '{'{'{2'd1, 2'd2}, 1'b1}, a};
+  assign p = o;
+  assign z = p.inner.arr[1];
+endmodule
+"""
+
+
+def test_unpacked_structs_are_flattened_and_copied_field_by_field(tmp_path: Path) -> None:
+    design = build(tmp_path, STRUCT_SV)
+    assert not design.diagnostics
+    names = set(design.signals)
+    assert {"s.f", "s.g", "t.f", "t.g", "o.inner.arr[0]", "o.inner.arr[1]", "o.inner.h"} <= names
+    assert not {"s", "t", "o", "o.inner", "o.inner.arr"} & names
+    assert design.signals["o.k"].bit_range == BitRange(left=3, right=0)
+
+    def rhs(signal: str) -> ir.Expr:
+        (driver,) = design.drivers[signal]
+        (assign,) = driver.assigns
+        assert assign.full_write and assign.written == (0, design.signals[signal].width)
+        return assign.rhs
+
+    assert rhs("s.f") == ir.SignalRef(4, False, "a")
+    assert rhs("t.g") == ir.SignalRef(4, False, "s.g")
+    assert ir.evaluate(rhs("o.inner.arr[1]"), lambda _: None).bits == "10"
+    assert rhs("p.inner.arr[1]") == ir.SignalRef(2, False, "o.inner.arr[1]")
+    assert ir.signals_of(rhs("z")) == ("p.inner.arr[1]",)
+
+
+def test_struct_copy_then_one_field_read_keeps_only_that_fields_source(tmp_path: Path) -> None:
+    design = build(tmp_path, STRUCT_SV)
+    provider = static_provider(
+        {"a": "0011", "b": "0101", "s.f": "0011", "s.g": "0101", "t.f": "0011", "t.g": "0101",
+         "y": "0101"}  # fmt: skip
+    )
+    options = SliceOptions(trace_scope=SCOPE, synthesize_assertion=False)
+    report = slice_failure(
+        failure_at("y", 2, 25000, actual="0101", expected="0000"), provider, design, options
+    )
+    assert codes(report) == set() and not report.truncated
+    paths = {node.signal_path for node in report.nodes}
+    assert paths == {"tb.dut.y", "tb.dut.t.g", "tb.dut.s.g", "tb.dut.b"}
+    assert CausalReport.model_validate_json(report.model_dump_json()) == report
 
 
 def test_expand_holds_steps_back_one_cycle_at_a_time(
@@ -1487,6 +2052,485 @@ def test_synthesize_assertion_works_from_a_report_alone(
 
 
 # --------------------------------------------------------------------------
+# Module hierarchy (B-01)
+# --------------------------------------------------------------------------
+
+CORE_SV = """\
+module core (
+  input  logic       clk,
+  input  logic       rst_n,
+  input  logic       en,
+  input  logic [3:0] d,
+  output logic [3:0] q
+);
+  logic [3:0] r;
+  always_ff @(posedge clk) begin
+    if (!rst_n) r <= 4'd0;
+    else if (en) r <= d + 4'd1;
+  end
+  assign q = r;
+endmodule
+"""
+CORE_WRITE_LINE = 11
+
+HIER_TOP_SV = """\
+module top (
+  input  logic       clk,
+  input  logic       rst_n,
+  input  logic       en,
+  input  logic [3:0] a,
+  output logic [3:0] y
+);
+  logic [3:0] inner;
+  core u_core (.clk(clk), .rst_n(rst_n), .en(en), .d(a), .q(inner));
+  assign y = ~inner;
+endmodule
+"""
+
+
+def hier_provider() -> MockWaveformProvider:
+    """Trace of ``top``: ``u_core.r`` goes from 0011 to 0100 at the cycle 2 edge."""
+    values = {
+        "rst_n": "1",
+        "en": "1",
+        "a": "0011",
+        "u_core.rst_n": "1",
+        "u_core.en": "1",
+        "u_core.d": "0011",
+    }
+    changing: dict[str, Sequence[tuple[int, str]]] = {
+        name: [(0, "0011"), (25000, "0100")] for name in ("u_core.r", "u_core.q", "inner")
+    }
+    changing["y"] = [(0, "1100"), (25000, "1011")]
+    return static_provider(values, changing=changing)
+
+
+HIER_FAILURE = failure_at("y", 2, 25000, actual="1011", expected="1100")
+
+
+@pytest.fixture()
+def hier(tmp_path: Path) -> DesignGraph:
+    return build(tmp_path, CORE_SV + HIER_TOP_SV, "hier.sv")
+
+
+def test_child_ports_are_internal_signals_driven_by_their_connections(hier: DesignGraph) -> None:
+    signals = hier.signals
+    assert signals["a"].kind is SignalKind.INPUT and signals["y"].kind is SignalKind.OUTPUT
+    for name in ("u_core.clk", "u_core.d", "u_core.q", "u_core.r"):
+        assert signals[name].kind is SignalKind.INTERNAL, name
+    assert signals["u_core.d"].bit_range == BitRange(left=3, right=0)
+    (into,) = hier.drivers["u_core.d"]
+    assert (into.process, into.edge_type, into.unsupported) == (
+        ProcessKind.PORT,
+        EdgeType.COMBINATIONAL,
+        None,
+    )
+    assert into.assigns[0].text == "u_core.d = a"
+    assert ir.signals_of(into.assigns[0].rhs) == ("a",)
+    (out_of,) = hier.drivers["inner"]
+    assert out_of.process is ProcessKind.PORT and out_of.assigns[0].text == "inner = u_core.q"
+    (register,) = hier.drivers["u_core.r"]
+    assert register.clock is not None and register.clock.signal == "u_core.clk"
+    assert hier.canonical("u_core.clk") == "clk"
+    assert hier.canonical("u_core.d") == "a" and hier.canonical("inner") == "inner"
+    assert "UNSUPPORTED_INSTANCE" not in {d.code for d in hier.diagnostics}
+
+
+def test_slice_crosses_into_a_child_register_and_back_out_to_top_inputs(
+    hier: DesignGraph,
+) -> None:
+    report = slice_failure(HIER_FAILURE, hier_provider(), hier, OPTIONS)
+    assert not report.truncated and codes(report) == set()
+    assert CausalReport.model_validate_json(report.model_dump_json()) == report
+
+    chain = [
+        ("y", 2, SETTLED),
+        ("inner", 2, SETTLED),
+        ("u_core.q", 2, SETTLED),
+        ("u_core.r", 2, SETTLED),
+        ("u_core.d", 2, BEFORE),
+        ("a", 2, BEFORE),
+    ]
+    types = [edges_of(report, chain[i + 1], chain[i])[0].edge_type for i in range(len(chain) - 1)]
+    comb, seq = EdgeType.COMBINATIONAL, EdgeType.SEQUENTIAL
+    assert types == [comb, comb, comb, seq, comb]
+    assert node_of(report, "u_core.r", 2, SETTLED).signal_path == "tb.dut.u_core.r"
+    (enable,) = edges_of(report, ("u_core.en", 2, BEFORE), ("u_core.r", 2, SETTLED))
+    assert (enable.role, enable.branch) == (EdgeRole.CONTROL, BranchStatus.RETAINED)
+
+    targets = {edge.target for edge in report.edges}
+    leaves = {node.signal_path for node in report.nodes if node.id not in targets}
+    assert leaves == {"tb.dut.a", "tb.dut.en", "tb.dut.rst_n"}
+
+    top = report.suspects[0]
+    assert top.node_id == node_of(report, "u_core.r", 2, SETTLED).id
+    assert top.location is not None and top.location.line == CORE_WRITE_LINE
+    assert "changed tb.dut.u_core.r from 4'b0011 to 4'b0100" in top.reason
+
+
+def test_same_module_twice_with_different_parameters(tmp_path: Path) -> None:
+    design = build(
+        tmp_path,
+        "module stage #(parameter int W = 4, parameter logic [W-1:0] K = '0)\n"
+        "  (input logic [W-1:0] i, output logic [W-1:0] o);\n"
+        "  assign o = i ^ K;\n"
+        "endmodule\n"
+        "module top (input logic [3:0] a, input logic [7:0] b,\n"
+        "            output logic [3:0] x, output logic [7:0] z);\n"
+        "  stage #(.W(4), .K(4'h5)) u_n (.i(a), .o(x));\n"
+        "  stage #(.W(8), .K(8'hA0)) u_w (.i(b), .o(z));\n"
+        "endmodule\n",
+    )
+    assert design.signals["u_n.i"].width == 4 and design.signals["u_w.i"].width == 8
+    narrow = design.drivers["u_n.o"][0].assigns[0].rhs
+    wide = design.drivers["u_w.o"][0].assigns[0].rhs
+    assert ir.evaluate(narrow, {"u_n.i": Vec("0011")}.__getitem__).bits == "0110"
+    assert ir.evaluate(wide, {"u_w.i": Vec("00001111")}.__getitem__).bits == "10101111"
+
+    provider = static_provider(
+        {
+            "a": "0011", "b": "00001111", "x": "0110", "z": "10101111",
+            "u_n.i": "0011", "u_n.o": "0110", "u_w.i": "00001111", "u_w.o": "10101111",
+        }  # fmt: skip
+    )
+    # The design has no clock, so no assertion can be generated for it.
+    options = SliceOptions(trace_scope=SCOPE, synthesize_assertion=False)
+    report = slice_failure(
+        failure_at("z", 2, 25000, actual="10101111", expected="00001111"), provider, design, options
+    )
+    assert codes(report) == set() and not report.truncated
+    paths = {node.signal_path for node in report.nodes}
+    assert paths == {"tb.dut.z", "tb.dut.u_w.o", "tb.dut.u_w.i", "tb.dut.b"}
+    assert CausalReport.model_validate_json(report.model_dump_json()) == report
+
+
+CLOCKED_SV = """\
+module leafreg (input logic clk, input logic d, output logic q);
+  always_ff @(posedge clk) q <= d;
+endmodule
+module mid (input logic clk, input logic gate, input logic d, output logic q, output logic qg);
+  logic gclk;
+  assign gclk = clk & gate;
+  leafreg u_leaf (.clk(clk), .d(d), .q(q));
+  leafreg u_gated (.clk(gclk), .d(d), .q(qg));
+endmodule
+module top (input logic clk, input logic gate, input logic d, output logic q, output logic qg);
+  mid u_mid (.clk(clk), .gate(gate), .d(d), .q(q), .qg(qg));
+endmodule
+"""
+
+
+def clocked_provider() -> MockWaveformProvider:
+    names = (
+        "gate", "d", "q", "qg", "u_mid.d", "u_mid.q", "u_mid.qg", "u_mid.u_leaf.d",
+        "u_mid.u_leaf.q", "u_mid.u_gated.d", "u_mid.u_gated.q",
+    )  # fmt: skip
+    return static_provider(dict.fromkeys(names, "1"))
+
+
+def test_clock_passed_through_two_levels_is_the_failure_clock(tmp_path: Path) -> None:
+    design = build(tmp_path, CLOCKED_SV)
+    assert design.canonical("u_mid.u_leaf.clk") == "clk"
+    report = slice_failure(
+        failure_at("q", 2, 25000, actual="1", expected="0"), clocked_provider(), design, OPTIONS
+    )
+    assert not report.truncated and codes(report) == set()
+    (step,) = edges_of(report, ("u_mid.u_leaf.d", 2, BEFORE), ("u_mid.u_leaf.q", 2, SETTLED))
+    assert step.edge_type is EdgeType.SEQUENTIAL
+    assert has_node(report, "d")
+    assert CausalReport.model_validate_json(report.model_dump_json()) == report
+
+
+def test_gated_clock_is_not_an_alias_and_truncates_the_slice(tmp_path: Path) -> None:
+    design = build(tmp_path, CLOCKED_SV)
+    assert design.canonical("u_mid.u_gated.clk") == "u_mid.gclk"
+    report = slice_failure(
+        failure_at("qg", 2, 25000, actual="1", expected="0"), clocked_provider(), design, OPTIONS
+    )
+    assert report.truncated and "UNSUPPORTED_CLOCK" in codes(report)
+    assert has_node(report, "u_mid.u_gated.q") and not has_node(report, "u_mid.u_gated.d")
+    message = next(d.message for d in report.diagnostics if d.code == "UNSUPPORTED_CLOCK")
+    assert "tb.dut.u_mid.u_gated.q" in message
+    assert CausalReport.model_validate_json(report.model_dump_json()) == report
+
+
+def test_child_signal_missing_from_the_trace_keeps_both_branches(tmp_path: Path) -> None:
+    design = build(
+        tmp_path,
+        "module pick (input logic s, input logic [3:0] a, b, output logic [3:0] o);\n"
+        "  assign o = s ? a : b;\n"
+        "endmodule\n"
+        "module top (input logic sel, input logic [3:0] a, b, output logic [3:0] y);\n"
+        "  pick u_pick (.s(sel), .a(a), .b(b), .o(y));\n"
+        "endmodule\n",
+    )
+    provider = static_provider(
+        {
+            "sel": "1", "a": "1010", "b": "0101", "y": "1010",
+            "u_pick.a": "1010", "u_pick.b": "0101", "u_pick.o": "1010",
+        }  # fmt: skip
+    )
+    report = slice_failure(
+        failure_at("y", 2, 25000, actual="1010", expected="0101"), provider, design, OPTIONS
+    )
+    assert "SIGNAL_NOT_OBSERVED" in codes(report)
+    message = next(d.message for d in report.diagnostics if d.code == "SIGNAL_NOT_OBSERVED")
+    assert "tb.dut.u_pick.s" in message
+    out = ("u_pick.o", 2, SETTLED)
+    assert node_of(report, "u_pick.s", 2, SETTLED).value is None
+    assert branches(edges_of(report, ("u_pick.a", 2, SETTLED), out)) == {BranchStatus.UNKNOWN}
+    assert branches(edges_of(report, ("u_pick.b", 2, SETTLED), out)) == {BranchStatus.UNKNOWN}
+    # Both arms are followed out of the child to the top inputs.
+    assert has_node(report, "a") and has_node(report, "b") and has_node(report, "sel")
+    assert CausalReport.model_validate_json(report.model_dump_json()) == report
+
+
+def test_assertion_binds_with_hierarchical_references(hier: DesignGraph) -> None:
+    options = SliceOptions(trace_scope=SCOPE, reset_path="tb.dut.rst_n", reset_active="0")
+    report = slice_failure(HIER_FAILURE, hier_provider(), hier, options)
+    (assertion,) = report.assertions
+    text = assertion.text
+    assert "(u_core__d === 4'b0011)" in text
+    assert "|=> (!$isunknown(y) && (y == 4'b1100));" in text
+    bind = text.rstrip().splitlines()[-1]
+    assert bind.startswith("bind top waveroot_chk_a1 ")
+    assert ".u_core__d(u_core.d)" in bind and ".y(y)" in bind
+    design_text = CORE_SV + HIER_TOP_SV
+    assert compile_errors(design_text + "\n" + text) == []
+    # Negative control: a hierarchical reference that does not exist is rejected.
+    broken = text.replace("(u_core.d)", "(u_core.nope)")
+    assert compile_errors(design_text + "\n" + broken) != []
+
+
+def test_multi_file_design_hashes_every_file_and_points_into_the_child(tmp_path: Path) -> None:
+    core = tmp_path / "rtl" / "core.sv"
+    top = tmp_path / "rtl" / "top.sv"
+    core.parent.mkdir()
+    core.write_text(CORE_SV, encoding="utf-8")
+    top.write_text(HIER_TOP_SV, encoding="utf-8")
+    design = build_design_graph([top, core], root=tmp_path, top="top")
+    assert [(source.path, source.sha256) for source in design.sources] == [
+        ("rtl/core.sv", hashlib.sha256(core.read_bytes()).hexdigest()),
+        ("rtl/top.sv", hashlib.sha256(top.read_bytes()).hexdigest()),
+    ]
+    by_id = {source.id: source.path for source in design.sources}
+    report = slice_failure(HIER_FAILURE, hier_provider(), design, OPTIONS)
+    assert report.sources == design.sources
+    top_suspect = report.suspects[0]
+    assert top_suspect.location is not None
+    assert by_id[top_suspect.location.source_id] == "rtl/core.sv"
+    assert top_suspect.location.line == CORE_WRITE_LINE
+    # Port connections are located on the instance line of the parent's file. They share
+    # that line, so they collapse to one suspect.
+    lines = top.read_text(encoding="utf-8").splitlines()
+    wiring = [
+        s
+        for s in report.suspects
+        if s.location is not None and by_id[s.location.source_id] == "rtl/top.sv"
+        and "core u_core" in lines[s.location.line - 1]
+    ]
+    assert len(wiring) == 1
+
+
+# --------------------------------------------------------------------------
+# Graph serialization (B-04)
+# --------------------------------------------------------------------------
+
+UNSUPPORTED_SV = """\
+module sub (input logic i, output logic o, inout wire io);
+  assign o = ~i;
+endmodule
+module top (input logic clk, rst_n, en, input logic [3:0] a,
+            output logic [3:0] loop, output logic q, inst_out, inout wire bus);
+  sub u_sub (.i(a[0]), .o(inst_out), .io(bus));
+  always_ff @(posedge clk or negedge rst_n)
+    if (!rst_n) q <= 1'b0; else q <= a[0];
+  always_comb for (int i = 0; i < 4; i++) loop[i] = a[3 - i] & en;
+endmodule
+"""
+
+SELECTS_SV = """\
+module sel (input logic [3:0] a, input logic [1:0] k, input logic [12:0] w,
+            output logic y, output logic [1:0] z, output logic signed [4:0] v,
+            output logic [7:0] big_out);
+  logic [7:0] big [5000];
+  assign y = a[k];
+  assign z = a[k +: 2];
+  assign v = $signed(a);
+  assign big_out = big[w];
+endmodule
+"""
+
+ROUND_TRIP_DESIGNS = {
+    "dut": DUT_SV,
+    "hierarchy": CORE_SV + HIER_TOP_SV,
+    "clocks": CLOCKED_SV,
+    "arrays": ARRAY_SV,
+    "packed": PACKED_SV,
+    "partial": PARTIAL_SV,
+    "structs": STRUCT_SV,
+    "unsupported": UNSUPPORTED_SV,
+    "selects": SELECTS_SV,
+}
+
+
+def node_classes(design: DesignGraph) -> set[type[ir.Expr]]:
+    """Every IR node class that occurs anywhere in ``design``."""
+    found: set[type[ir.Expr]] = set()
+    stack: list[ir.Expr] = []
+    for drivers in design.drivers.values():
+        for driver in drivers:
+            for assign in driver.assigns:
+                stack.extend([assign.rhs, *assign.index_operands])
+                for guard in assign.guards:
+                    stack.extend(ir.guard_operands(guard))
+    while stack:
+        node = stack.pop()
+        found.add(type(node))
+        stack.extend(ir.children(node))
+    return found
+
+
+def all_expr_classes() -> set[type[ir.Expr]]:
+    """Every IR node class, wherever it is defined.
+
+    ``dataclass(slots=True)`` replaces each class with a new one, and the
+    discarded originals can still appear in ``__subclasses__()``. Only the
+    class a module actually binds under its name is live.
+    """
+    found: set[type[ir.Expr]] = set()
+    pending = list(ir.Expr.__subclasses__())
+    while pending:
+        cls = pending.pop()
+        pending.extend(cls.__subclasses__())
+        if getattr(sys.modules[cls.__module__], cls.__qualname__, None) is cls:
+            found.add(cls)
+    return found
+
+
+@pytest.mark.parametrize("name", sorted(ROUND_TRIP_DESIGNS))
+def test_graph_round_trips_through_json(tmp_path: Path, name: str) -> None:
+    design = build(tmp_path, ROUND_TRIP_DESIGNS[name])
+    text = dump_design_graph(design)
+    loaded = load_design_graph(text)
+    assert loaded == design
+    assert loaded.edges == design.edges, "edges are derived again on load"
+    assert dump_design_graph(loaded) == text
+
+
+def test_fifo_graph_round_trips_through_json(fifo_design: DesignGraph) -> None:
+    assert load_design_graph(dump_design_graph(fifo_design)) == fifo_design
+
+
+def test_round_trip_designs_exercise_every_node_class(tmp_path: Path) -> None:
+    seen: set[type[ir.Expr]] = set()
+    for index, source in enumerate(ROUND_TRIP_DESIGNS.values()):
+        folder = tmp_path / str(index)
+        folder.mkdir()
+        seen |= node_classes(build(folder, source))
+    assert seen == all_expr_classes()
+
+
+def test_every_node_class_has_an_encoder() -> None:
+    classes = all_expr_classes()
+    assert classes, "the IR defines node classes"
+    missing = sorted(cls.__name__ for cls in classes if cls not in EXPR_CODECS)
+    assert not missing, f"IR node classes without a JSON encoder: {missing}"
+    tags = [tag for tag, _ in EXPR_CODECS.values()]
+    assert len(tags) == len(set(tags)), "tags are unique"
+
+
+def test_two_independent_builds_dump_identical_text(tmp_path: Path) -> None:
+    first = dump_design_graph(build_design_graph([FIFO_SV], root=REPO))
+    second = dump_design_graph(build_design_graph([FIFO_SV], root=REPO))
+    assert first == second
+    a = dump_design_graph(build(tmp_path, CORE_SV + HIER_TOP_SV))
+    b = dump_design_graph(build(tmp_path, CORE_SV + HIER_TOP_SV))
+    assert a == b
+
+
+def test_slice_of_a_loaded_graph_equals_the_slice_of_the_original(
+    fifo: MockFixture, fifo_failure: FailureAnchor, fifo_design: DesignGraph
+) -> None:
+    loaded = load_design_graph(dump_design_graph(fifo_design))
+    provider = with_memory(fifo.trace)
+    options = SliceOptions(trace_scope=SCOPE, reset_path="tb.dut.rst_n", reset_active="0")
+    for failure in (fifo_failure, OUT_DATA_FAILURE):
+        original = slice_failure(failure, provider, fifo_design, options)
+        again = slice_failure(failure, provider, loaded, options)
+        assert again.model_dump_json() == original.model_dump_json()
+
+
+def test_slice_of_a_loaded_hierarchical_graph_is_unchanged(hier: DesignGraph) -> None:
+    loaded = load_design_graph(dump_design_graph(hier))
+    original = slice_failure(HIER_FAILURE, hier_provider(), hier, OPTIONS)
+    again = slice_failure(HIER_FAILURE, hier_provider(), loaded, OPTIONS)
+    assert again.model_dump_json() == original.model_dump_json()
+
+
+def _edited(text: str, edit: object) -> str:
+    document = json.loads(text)
+    assert callable(edit)
+    edit(document)
+    return json.dumps(document)
+
+
+def _first_rhs(document: dict[str, object]) -> dict[str, object]:
+    drivers = document["drivers"]
+    assert isinstance(drivers, list)
+    rhs = drivers[0]["assigns"][0]["rhs"]
+    assert isinstance(rhs, dict)
+    return rhs
+
+
+@pytest.mark.parametrize(
+    ("edit", "message"),
+    [
+        (lambda d: d.update(format_version=2), "unsupported format_version 2"),
+        (lambda d: d.update(format_version=True), "unsupported format_version True"),
+        (lambda d: d.pop("format_version"), "missing field format_version"),
+        (lambda d: d.update(extra=1), "unknown fields ['extra']"),
+        (lambda d: d.pop("aliases"), "missing fields ['aliases']"),
+        (lambda d: _first_rhs(d).update(k="no_such_node"), "unknown IR node tag 'no_such_node'"),
+        (lambda d: _first_rhs(d).update(surprise=0), "unknown fields ['surprise']"),
+        (lambda d: _first_rhs(d).update(width=True), "expected an integer"),
+        (lambda d: d["signals"][0].update(kind="sideways"), "unknown SignalKind 'sideways'"),
+        (lambda d: d["sources"][0].update(sha256="nope"), "source"),
+    ],
+)
+def test_malformed_graph_text_is_rejected_with_a_clear_error(
+    fifo_design: DesignGraph, edit: object, message: str
+) -> None:
+    text = _edited(dump_design_graph(fifo_design), edit)
+    with pytest.raises(GraphFormatError) as raised:
+        load_design_graph(text)
+    assert message in str(raised.value)
+    with pytest.raises(GraphFormatError, match="not JSON"):
+        load_design_graph("{")
+
+
+def test_edited_source_is_reported_and_carried_into_every_report(tmp_path: Path) -> None:
+    source = tmp_path / "hier.sv"
+    source.write_text(CORE_SV + HIER_TOP_SV, encoding="utf-8")
+    design = build_design_graph([source], root=tmp_path)
+    text = dump_design_graph(design)
+    assert verify_sources(design, tmp_path) == ()
+    assert load_design_graph(text, root=tmp_path) == design
+
+    source.write_text(CORE_SV + HIER_TOP_SV + "// edited\n", encoding="utf-8")
+    (changed,) = verify_sources(design, tmp_path)
+    assert changed.code == "SOURCE_CHANGED" and "hier.sv has changed" in changed.message
+    stale = load_design_graph(text, root=tmp_path)
+    assert "SOURCE_CHANGED" in {d.code for d in stale.diagnostics}
+    report = slice_failure(HIER_FAILURE, hier_provider(), stale, OPTIONS)
+    assert "SOURCE_CHANGED" in codes(report), "a stale graph is never sliced silently"
+
+    source.unlink()
+    (missing,) = verify_sources(design, tmp_path)
+    assert missing.code == "SOURCE_MISSING"
+
+
+# --------------------------------------------------------------------------
 # Review of PR #6: audit findings 1-7 and the benchmark ranking gaps
 # --------------------------------------------------------------------------
 
@@ -1952,6 +2996,28 @@ def test_round2_finding3_inferred_latch_hold_truncates_the_slice(tmp_path: Path)
     assert CausalReport.model_validate_json(report.model_dump_json()) == report
 
 
+def test_round2_finding3_latch_of_other_bits_does_not_truncate(tmp_path: Path) -> None:
+    """With bit demand (B-03), only a latch of the bits the slice follows ends it."""
+    design = build(
+        tmp_path,
+        "module m (input logic en, input logic [3:0] a, b, output logic [3:0] lo, hi);\n"
+        "  logic [7:0] y;\n"
+        "  always @* if (en) y[7:4] = a;\n"
+        "  always @* y[3:0] = b;\n"
+        "  assign lo = y[3:0];\n"
+        "  assign hi = y[7:4];\n"
+        "endmodule\n",
+    )
+    provider = static_provider(
+        {"en": "0", "a": "0000", "b": "0101", "y": "11110101", "lo": "0101", "hi": "1111"}
+    )
+    low = slice_failure(failure_at("lo", 2, 25000, "0101", "0000"), provider, design, OPTIONS)
+    assert not low.truncated and "NO_ACTIVE_ASSIGNMENT" not in codes(low)
+    assert has_node(low, "b")
+    high = slice_failure(failure_at("hi", 2, 25000, "1111", "0000"), provider, design, OPTIONS)
+    assert high.truncated and "NO_ACTIVE_ASSIGNMENT" in codes(high)
+
+
 # ---- PR #6 review round 3 (Astra re-audit at 5d765bd) ----------------------
 
 
@@ -2157,6 +3223,51 @@ def test_round3_m5_hold_scans_stay_linear(tmp_path: Path, monkeypatch: pytest.Mo
     assert large < 4 * 400, large
 
 
+def test_round3_m1_bit_demand_checks_only_the_followed_bits(tmp_path: Path) -> None:
+    """With bit demand (B-03), partial writes that cover a bit on every path are proven."""
+    design = build(
+        tmp_path,
+        "module m (input logic en, input logic [1:0] a, b, output logic [1:0] lo, hi);\n"
+        "  logic [3:0] y;\n"
+        "  always_comb begin\n"
+        "    y[1:0] = a;\n"
+        "    if (en) y[3:2] = b;\n"
+        "  end\n"
+        "  assign lo = y[1:0];\n"
+        "  assign hi = y[3:2];\n"
+        "endmodule\n",
+    )
+    provider = static_provider(
+        {"en": "0", "a": "01", "b": "00", "y": "1101", "lo": "01", "hi": "11"}
+    )
+    low = slice_failure(failure_at("lo", 2, 25000, "01", "00"), provider, design, OPTIONS)
+    assert not low.truncated and "PARTIAL_ASSIGNMENT" not in codes(low)
+    assert has_node(low, "a")
+    # For the high bits only the en-guarded write could act, and it does not execute.
+    high = slice_failure(failure_at("hi", 2, 25000, "11", "00"), provider, design, OPTIONS)
+    assert high.truncated and "NO_ACTIVE_ASSIGNMENT" in codes(high)
+
+
+def test_round3_m1_partial_writes_that_cover_every_bit_are_complete(tmp_path: Path) -> None:
+    design = build(
+        tmp_path,
+        "module m (input logic sel, input logic [1:0] a, b, output logic [3:0] y);\n"
+        "  always_comb begin\n"
+        "    y[1:0] = a;\n"
+        "    if (sel) y[3:2] = a;\n"
+        "    else y[3:2] = b;\n"
+        "  end\n"
+        "endmodule\n",
+    )
+    report = slice_failure(
+        failure_at("y", 2, 25000, "0101", "0000"),
+        static_provider({"a": "01", "b": "01", "y": "0101"}),
+        design,
+        OPTIONS,
+    )
+    assert "PARTIAL_ASSIGNMENT" not in codes(report)
+
+
 # ---- PR #6 review round 4 (Astra re-audit at 8ac6cd0): the modeled subset -----
 
 
@@ -2260,6 +3371,8 @@ def test_round4_r4_driver_inside_a_generate_block_stops_the_slice(tmp_path: Path
     assert report.truncated and "UNSUPPORTED_DRIVER" in codes(report)
     assert "UNSUPPORTED_SCOPE" in {diagnostic.code for diagnostic in design.diagnostics}
     assert has_node(report, "a"), "the traversed driver is still followed"
+    # The new driver kind survives the B-04 graph serialization.
+    assert load_design_graph(dump_design_graph(design)) == design
 
 
 @pytest.mark.parametrize(
@@ -2320,3 +3433,58 @@ def test_round4_the_modeled_subset_is_still_traced(tmp_path: Path) -> None:
     assert branches(edges_of(report, ("b", 2, SETTLED), ("y", 2, SETTLED))) == {
         BranchStatus.PRUNED
     }
+
+
+# ---- Track C entry point (C04 part 2) ---------------------------------------
+
+
+def test_analyze_failure_is_build_then_slice(
+    fifo_failure: FailureAnchor, fifo_provider: MockWaveformProvider, fifo_design: DesignGraph
+) -> None:
+    options = SliceOptions(trace_scope=SCOPE, reset_path="tb.dut.rst_n", reset_active="0")
+    report = analyze_failure(fifo_failure, fifo_provider, [FIFO_SV], root=REPO, options=options)
+    assert report == slice_failure(fifo_failure, fifo_provider, fifo_design, options)
+    assert report.provenance.kind is ProvenanceKind.ANALYSIS
+    assert CausalReport.model_validate_json(report.model_dump_json()) == report
+
+
+def test_analyze_failure_source_paths_are_relative_to_the_given_root(
+    tmp_path: Path, fifo_failure: FailureAnchor, fifo_provider: MockWaveformProvider
+) -> None:
+    """The base of SourceFile.path is the caller's choice, e.g. a benchmark case directory."""
+    case = tmp_path / "case_01"
+    rtl = case / "rtl" / "mutant" / "fifo.sv"
+    rtl.parent.mkdir(parents=True)
+    rtl.write_bytes(FIFO_SV.read_bytes())
+    options = SliceOptions(trace_scope=SCOPE)
+    report = analyze_failure(fifo_failure, fifo_provider, [rtl], root=case, options=options)
+    (source,) = report.sources
+    assert source.path == "rtl/mutant/fifo.sv"
+    assert source.sha256 == hashlib.sha256(FIFO_SV.read_bytes()).hexdigest()
+    assert all(
+        node.location is None or node.location.source_id == source.id for node in report.nodes
+    )
+    # Same analysis whatever the base: only the recorded path changes, in the source
+    # list and in the generated assertion's comment that cites the top suspect's file.
+    from_repo = analyze_failure(fifo_failure, fifo_provider, [FIFO_SV], root=REPO, options=options)
+    differing = [
+        name for name in CausalReport.model_fields if getattr(from_repo, name) != getattr(report, name)
+    ]
+    assert differing == ["sources", "assertions"], differing
+    assert all("rtl/mutant/fifo.sv:" in a.text for a in report.assertions)
+    assert all(
+        a.text.replace("tests/fixtures/mock_fifo_wrap.sv", "rtl/mutant/fifo.sv") == b.text
+        for a, b in zip(from_repo.assertions, report.assertions, strict=True)
+    )
+
+
+def test_analyze_failure_refuses_sources_outside_the_root(
+    tmp_path: Path, fifo_failure: FailureAnchor, fifo_provider: MockWaveformProvider
+) -> None:
+    options = SliceOptions(trace_scope=SCOPE)
+    with pytest.raises(DesignError, match="not inside the source root"):
+        analyze_failure(fifo_failure, fifo_provider, [FIFO_SV], root=tmp_path, options=options)
+    with pytest.raises(DesignError, match="not found"):
+        analyze_failure(
+            fifo_failure, fifo_provider, [tmp_path / "missing.sv"], root=tmp_path, options=options
+        )

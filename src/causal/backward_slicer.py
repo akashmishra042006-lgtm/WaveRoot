@@ -32,14 +32,22 @@ from __future__ import annotations
 
 import re
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
+from pathlib import Path
 from typing import Final
 
 from src.causal import expr as ir
 from src.causal import fourstate as fs
-from src.causal.ast_graph import DesignGraph, Driver, GuardedAssign, ProcessKind, SignalKind
+from src.causal.ast_graph import (
+    DesignGraph,
+    Driver,
+    GuardedAssign,
+    ProcessKind,
+    SignalKind,
+    build_design_graph,
+)
 from src.causal.fourstate import Tri, Vec
 from src.causal.sva_synth import synthesize_assertion
 from src.contracts import (
@@ -73,9 +81,12 @@ _PROVENANCE_NOTE: Final = (
     "Backward dependency slice computed by src.causal from the RTL and the trace. "
     "Suspects are ranked candidates for investigation, not proof of a root cause."
 )
-# Design diagnostics that mean a driver may be missing from the graph. They are
-# repeated in every report because they weaken any slice of that design.
-_GLOBAL_CAVEATS: Final = frozenset({"UNSUPPORTED_SCOPE", "UNSUPPORTED_LVALUE"})
+# Design diagnostics that mean a driver may be missing from the graph, or that the
+# graph may not describe the current sources. They are repeated in every report
+# because they weaken any slice of that design.
+_GLOBAL_CAVEATS: Final = frozenset(
+    {"UNSUPPORTED_SCOPE", "UNSUPPORTED_LVALUE", "SOURCE_CHANGED", "SOURCE_MISSING"}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,7 +101,11 @@ class SliceOptions:
     slice may reach (None means back to cycle 0 of the failure's epoch).
     ``expand_holds`` makes a held register step back one cycle at a time, which
     exposes the hold condition of every cycle instead of one carry edge.
-    ``reset_path`` and ``reset_active`` only qualify the generated assertion.
+    ``reset_path`` and ``reset_active`` name the reset as a trace path and its
+    active level (``"0"`` or ``"1"``). They qualify the generated assertion and
+    let a register that the reset branch never assigns be located at that
+    branch. Nothing is inferred from names, so without them such a register
+    stays an epoch boundary at its declaration.
     """
 
     trace_scope: str
@@ -104,6 +119,33 @@ class SliceOptions:
     reset_path: str | None = None
     reset_active: str | None = None
     case_id: str | None = None
+
+
+def analyze_failure(
+    failure: FailureAnchor,
+    provider: WaveformProvider,
+    sources: Sequence[Path | str],
+    *,
+    root: Path | str,
+    options: SliceOptions,
+    top: str | None = None,
+) -> CausalReport:
+    """Track C's entry point: elaborate ``sources`` and slice back from ``failure``.
+
+    ``sources`` are the RTL files the analyzer may see (a benchmark's
+    ``analysis_inputs.rtl``), not the testbench. Each ``SourceFile.path`` in the
+    report is relative to ``root``, and every source must lie inside it.
+    ``top`` names the module to analyze when the sources hold more than one
+    top-level module. ``provider`` serves the same trace the failure came from,
+    and ``options.trace_scope`` is the trace path of that module's instance.
+
+    The report validates against ``src.contracts.CausalReport`` and holds only
+    analysis (``provenance.kind`` is ``analysis``). Raises ``DesignError`` when a
+    source is missing or outside ``root``, elaboration fails, or ``top`` is not
+    resolved.
+    """
+    design = build_design_graph(sources, root=root, top=top)
+    return slice_failure(failure, provider, design, options)
 
 
 def slice_failure(
@@ -202,10 +244,10 @@ class _Node:
 def _is_forward(expr: ir.Expr) -> bool:
     """True when ``expr`` only passes one source on unchanged.
 
-    That is a signal or a select of it (constant or run-time). A conversion
-    that changes width, or turns x/z into 0, computes a new value and is not a
-    forward; one that only changes signedness is. A ``?:`` chooses between
-    sources and is not a forward.
+    That is a signal, a select of it (constant or run-time), or one element of
+    an unpacked array. A conversion that changes width, or turns x/z into 0,
+    computes a new value and is not a forward; one that only changes
+    signedness is. A ``?:`` chooses between sources and is not a forward.
     """
     while isinstance(expr, (ir.Convert, ir.PartSelect, ir.IndexedSelect)):
         if isinstance(expr, ir.Convert):
@@ -214,7 +256,7 @@ def _is_forward(expr: ir.Expr) -> bool:
             expr = expr.operand
         else:
             expr = expr.value
-    return isinstance(expr, ir.SignalRef)
+    return isinstance(expr, (ir.SignalRef, ir.ArrayRead))
 
 
 @dataclass(slots=True)
@@ -286,6 +328,14 @@ def _plural(count: int, singular: str, plural: str) -> str:
     return f"{count} {singular if count == 1 else plural}"
 
 
+def _read_mask(read: ir.Read) -> int | None:
+    """Bits of the read signal a read uses, as a position mask; None for every bit."""
+    if read.bits is None:
+        return None
+    offset, width = read.bits
+    return ((1 << width) - 1) << offset
+
+
 class _Slicer:
     def __init__(
         self,
@@ -309,10 +359,15 @@ class _Slicer:
         self._edges: dict[tuple[_Key, _Key, EdgeType, EdgeRole, BranchStatus], _Edge] = {}
         self._queue: deque[_Key] = deque()
         self._reached: dict[_Key, None] = {}
+        # Bits of each reached node the slice must explain, as a mask over positions
+        # counted from the signal's left bit. A node is expanded again when it grows.
+        self._demand: dict[_Key, int] = {}
+        self._queued: set[_Key] = set()
+        self._expanded: set[_Key] = set()
         self._diagnostics: dict[Diagnostic, None] = {}
         self._truncated = False
-        # (signal, cycle) -> the cycle a hold scan starting there ends at.
-        self._hold_origins: dict[tuple[str, int], int] = {}
+        # (signal, demanded bits, cycle) -> the cycle a hold scan starting there ends at.
+        self._hold_origins: dict[tuple[str, int, int], int] = {}
 
     # ---- entry ----------------------------------------------------------
 
@@ -351,9 +406,13 @@ class _Slicer:
         self._reach(anchor)
         while self._queue:
             key = self._queue.popleft()
+            self._queued.discard(key)
             if len(self._nodes) >= self._options.max_nodes:
                 self._node_limit(self._nodes[key])
                 continue
+            if key in self._expanded:
+                self._reset(key)
+            self._expanded.add(key)
             self._expand(key)
         return self._report(anchor)
 
@@ -364,6 +423,21 @@ class _Slicer:
             f"The slice reached the limit of {self._options.max_nodes} nodes; nodes beyond it "
             "were not added or expanded.",
         )
+
+    def _reset(self, key: _Key) -> None:
+        """Forget an expansion, so the node can be expanded again for more bits.
+
+        Demand only grows, so a later expansion keeps or strengthens every edge
+        of the earlier one; nothing it reached becomes unreachable.
+        """
+        for identity in [identity for identity, edge in self._edges.items() if edge.target == key]:
+            del self._edges[identity]
+        node = self._nodes[key]
+        info = self._design.signals.get(key[0])
+        node.kind = _Kind.PENDING
+        node.note = ""
+        node.changed = None
+        node.location = info.span if info is not None else None
 
     def _unlocalized(self, code: str, message: str) -> CausalReport:
         self._diag(code, message)
@@ -494,10 +568,47 @@ class _Slicer:
             self._nodes[key] = node
         return node
 
-    def _reach(self, key: _Key) -> None:
-        if key not in self._reached:
+    def _full(self, signal: str) -> int:
+        return (1 << self._design.signals[signal].width) - 1
+
+    def _reach(self, key: _Key, demand: int | None = None) -> None:
+        """Queue ``key`` for expansion of the ``demand`` bits (None: every bit)."""
+        full = self._full(key[0])
+        wanted = full if demand is None else (demand & full) or full
+        known = self._demand.get(key)
+        if known is None:
+            self._demand[key] = wanted
             self._reached[key] = None
+        elif wanted & ~known:
+            self._demand[key] = known | wanted
+        else:
+            return
+        if key not in self._queued:
+            self._queued.add(key)
             self._queue.append(key)
+
+    def _bits_text(self, signal: str, mask: int) -> str:
+        """Declared bit indices in ``mask``, for example ``bits [7:4], [0]``."""
+        info = self._design.signals[signal]
+        if mask == self._full(signal):
+            return "all bits"
+        left = info.bit_range.left if info.bit_range is not None else 0
+        right = info.bit_range.right if info.bit_range is not None else 0
+
+        def index(position: int) -> int:
+            return left - position if left >= right else left + position
+
+        runs: list[str] = []
+        position = 0
+        while position < info.width:
+            if mask >> position & 1:
+                start = position
+                while position + 1 < info.width and mask >> (position + 1) & 1:
+                    position += 1
+                high, low = index(start), index(position)
+                runs.append(f"[{high}]" if start == position else f"[{high}:{low}]")
+            position += 1
+        return ("bit " if len(runs) == 1 and ":" not in runs[0] else "bits ") + ", ".join(runs)
 
     def _add_edge(
         self,
@@ -507,7 +618,9 @@ class _Slicer:
         role: EdgeRole,
         branch: BranchStatus,
         reason: str,
+        demand: int | None = None,
     ) -> None:
+        """Add an edge; a non-pruned one reaches ``demand`` bits of ``source``."""
         if source == target:
             self._diag(
                 "COMBINATIONAL_SELF_REFERENCE",
@@ -528,7 +641,7 @@ class _Slicer:
             edge = self._edges[identity] = _Edge(source, target, edge_type, role, branch)
         edge.reasons.setdefault(reason)
         if branch is not BranchStatus.PRUNED:
-            self._reach(source)
+            self._reach(source, demand)
 
     def _diag(self, code: str, message: str) -> None:
         self._diagnostics.setdefault(Diagnostic(code=code, message=message))
@@ -611,37 +724,76 @@ class _Slicer:
                 )
 
     def _clock_matches(self, driver: Driver) -> bool:
+        """True when ``driver`` is clocked by the rising edge of the failure's clock.
+
+        A clock port of a child instance matches when it is connected to the
+        failure's clock by plain whole-signal port connections. A clock that
+        passes through logic is a different signal and does not match.
+        """
         clock = driver.clock
-        return (
-            clock is not None
-            and clock.rising
-            and self._trace_path(clock.signal) == self._failure.clock_path
-        )
+        if clock is None or not clock.rising:
+            return False
+        if self._trace_path(clock.signal) == self._failure.clock_path:
+            return True
+        failure_clock = self._local(self._failure.clock_path)
+        if failure_clock is None:
+            return False
+        return self._design.canonical(clock.signal) == self._design.canonical(failure_clock)
+
+    def _written(self, assign: GuardedAssign, signal: str) -> tuple[int, bool]:
+        """Bits ``assign`` may write, and whether exactly those bits are written."""
+        if assign.full_write:
+            return self._full(signal), True
+        if assign.written is None:
+            return self._full(signal), False
+        offset, width = assign.written
+        return ((1 << width) - 1) << offset, True
 
     def _verdicts(
-        self, driver: Driver, outcomes: list[list[Tri]], when: str
-    ) -> tuple[list[_Verdict], bool]:
-        """Decide which assignments took effect; the last executed full write wins."""
+        self, driver: Driver, outcomes: list[list[Tri]], when: str, signal: str, demand: int
+    ) -> tuple[list[_Verdict], int]:
+        """Decide which assignments took effect for the ``demand`` bits of ``signal``.
+
+        The last executed write of a bit wins. An assignment is overwritten
+        only when later definite writes cover every demanded bit it writes,
+        and one that writes no demanded bit is not followed. Returns the
+        verdicts in execution order and the demanded bits that no definite
+        write covers, which hold their previous value.
+        """
+        path = self._trace_path(signal)
         verdicts: list[_Verdict] = []
-        blocker: GuardedAssign | None = None
+        covered = 0
+        writers: list[tuple[GuardedAssign, int]] = []
         for assign, guards in zip(reversed(driver.assigns), reversed(outcomes)):
+            written, exact = self._written(assign, signal)
+            relevant = written & demand
             total = fs.tri_and(*guards)
-            if total is Tri.FALSE:
+            overwritten = relevant & ~covered == 0
+            if not relevant:
+                why = (
+                    f"`{assign.text}` writes only {self._bits_text(signal, written)} of {path}; "
+                    f"the slice follows {self._bits_text(signal, demand)}."
+                )
+                verdicts.append(_Verdict(BranchStatus.PRUNED, why, True))
+            elif total is Tri.FALSE:
                 guard = assign.guards[guards.index(Tri.FALSE)]
                 why = (
                     f"`{assign.text}` does not execute: {ir.describe_guard(guard)} is false "
                     f"{when}."
                 )
-                verdicts.append(_Verdict(BranchStatus.PRUNED, why, blocker is not None))
-            elif blocker is not None:
-                why = f"`{assign.text}` is overwritten by the later assignment `{blocker.text}`."
+                verdicts.append(_Verdict(BranchStatus.PRUNED, why, overwritten))
+            elif overwritten:
+                later = [f"`{a.text}`" for a, bits in reversed(writers) if bits & relevant]
+                noun = "assignment" if len(later) == 1 else "assignments"
+                why = f"`{assign.text}` is overwritten by the later {noun} {', '.join(later)}."
                 verdicts.append(_Verdict(BranchStatus.PRUNED, why, True))
             elif total is Tri.TRUE:
                 verdicts.append(
                     _Verdict(BranchStatus.RETAINED, f"`{assign.text}` executes {when}.", False)
                 )
-                if assign.full_write:
-                    blocker = assign
+                if exact:
+                    writers.append((assign, relevant))
+                    covered |= relevant
             else:
                 guard = assign.guards[guards.index(Tri.UNKNOWN)]
                 why = (
@@ -650,7 +802,7 @@ class _Slicer:
                 )
                 verdicts.append(_Verdict(BranchStatus.UNKNOWN, why, False))
         verdicts.reverse()
-        return verdicts, blocker is not None
+        return verdicts, demand & ~covered
 
     def _expand_driver(
         self, key: _Key, node: _Node, driver: Driver, cycle: int, phase: SamplingPhase
@@ -671,7 +823,8 @@ class _Slicer:
             [ir.evaluate_guard(guard, lookup) for guard in assign.guards]
             for assign in driver.assigns
         ]
-        verdicts, definite = self._verdicts(driver, outcomes, when)
+        demand = self._demand.get(key, self._full(signal))
+        verdicts, unwritten = self._verdicts(driver, outcomes, when, signal, demand)
 
         for assign, verdict in zip(driver.assigns, verdicts):
             if verdict.status is not BranchStatus.PRUNED and not ir.is_supported(assign.rhs):
@@ -689,19 +842,19 @@ class _Slicer:
                         outcome = ir.evaluate_guard(guard, lookup)
                         if outcome is Tri.FALSE:
                             status = BranchStatus.PRUNED
-                            reason = (
-                                f"`?:` arm of `{assign.text}` is not selected: "
-                                f"{ir.describe_guard(guard)} is false {when}."
-                            )
+                            reason = self._unselected(guard, assign, read.signal, when)
                             break
                         if outcome is Tri.UNKNOWN:
                             status = BranchStatus.UNKNOWN
-                            reason = (
-                                f"`?:` selection in `{assign.text}` is unknown: `{guard.text}` "
-                                f"is unknown {when}."
-                            )
+                            reason = self._unresolved(guard, assign, when)
                 self._add_edge(
-                    (read.signal, cycle, phase), key, edge_type, read.role, status, reason
+                    (read.signal, cycle, phase),
+                    key,
+                    edge_type,
+                    read.role,
+                    status,
+                    reason,
+                    _read_mask(read),
                 )
             for operand in assign.index_operands:
                 for read in ir.collect_reads(operand, EdgeRole.CONTROL):
@@ -714,6 +867,7 @@ class _Slicer:
                         EdgeRole.CONTROL,
                         verdict.status,
                         f"Selects the written element: {verdict.why}",
+                        _read_mask(read),
                     )
 
         decisions: dict[int, _Decision] = {}
@@ -741,6 +895,7 @@ class _Slicer:
                         EdgeRole.CONTROL,
                         status,
                         reason,
+                        _read_mask(read),
                     )
 
         live = [
@@ -749,7 +904,7 @@ class _Slicer:
             if verdict.status is not BranchStatus.PRUNED
         ]
         if edge_type is EdgeType.SEQUENTIAL:
-            if not definite:
+            if unwritten:
                 uncertain = any(v.status is BranchStatus.UNKNOWN for _, v in live)
                 if not live:
                     reason = (
@@ -761,10 +916,17 @@ class _Slicer:
                         f"{path} may hold its value: an assignment to it has an unknown "
                         f"condition at the cycle {cycle} clock edge."
                     )
-                else:
+                elif unwritten == self._full(signal):
                     reason = (
                         f"Bits of {path} that are not written at the cycle {cycle} clock edge "
                         "hold their value."
+                    )
+                else:
+                    shown = self._bits_text(signal, unwritten)
+                    verb = "is" if shown.startswith("bit ") else "are"
+                    reason = (
+                        f"{shown.capitalize()} of {path} {verb} not written at the cycle {cycle} "
+                        "clock edge and hold their value."
                     )
                 self._add_edge(
                     (signal, cycle, SamplingPhase.BEFORE),
@@ -773,41 +935,105 @@ class _Slicer:
                     EdgeRole.DATA,
                     BranchStatus.UNKNOWN if uncertain else BranchStatus.RETAINED,
                     reason,
+                    unwritten,
                 )
-        elif not live:
+        elif not live and any(self._written(assign, signal)[0] & demand for assign in driver.assigns):
             # The value was kept from an earlier evaluation (an inferred latch) or left
             # undriven; neither is traced, so the slice ends here and says so (spec 12).
+            # A process whose writes all miss the demanded bits explains nothing here,
+            # and is not a latch of those bits.
             self._stop(
                 node,
                 "NO_ACTIVE_ASSIGNMENT",
                 f"No assignment to {path} executes {when}; the process leaves it undriven or "
                 "infers storage, which is outside the MVP, so its value is not traced.",
             )
-        elif (
-            not definite
-            and driver.process is not ProcessKind.CONTINUOUS
-            and not _covers(
-                [assign.guards for assign, _ in live if assign.full_write],
-                lambda guard: ir.evaluate_guard(guard, lookup),
-            )
-        ):
-            # Some bits may keep a value from an earlier evaluation: a partial latch.
-            self._stop(
-                node,
-                "PARTIAL_ASSIGNMENT",
-                f"No assignment that writes all of {path} is certain to execute {when}, so "
-                "some of its bits may keep a value from an earlier evaluation (inferred "
-                "storage, which is outside the MVP); its value is not traced.",
-            )
+        elif unwritten and driver.process is not ProcessKind.CONTINUOUS:
+            exposed = self._exposed(driver, live, signal, unwritten, lookup)
+            if exposed:
+                # Those bits may keep a value from an earlier evaluation: a partial latch.
+                self._stop(
+                    node,
+                    "PARTIAL_ASSIGNMENT",
+                    f"No assignment is certain to write {self._bits_text(signal, exposed)} of "
+                    f"{path} {when}, so they may keep a value from an earlier evaluation "
+                    "(inferred storage, which is outside the MVP); its value is not traced.",
+                )
         self._classify(node, driver, live, outcomes)
+
+    def _exposed(
+        self,
+        driver: Driver,
+        live: list[tuple[GuardedAssign, _Verdict]],
+        signal: str,
+        bits: int,
+        lookup: ir.Lookup,
+    ) -> int:
+        """Bits of ``bits`` this process writes on some path but not on every path.
+
+        Bits the process never writes belong to other drivers. A bit is covered
+        when the exact writes of it form a complete cover (see ``_covers``);
+        a write whose bits depend on a run-time index covers nothing.
+        """
+        possible = 0
+        for assign in driver.assigns:
+            possible |= self._written(assign, signal)[0]
+        exact = [
+            (assign.guards, written)
+            for assign, _ in live
+            for written, known in [self._written(assign, signal)]
+            if known
+        ]
+        exposed = 0
+        verdict: dict[tuple[int, ...], bool] = {}
+        remaining, bit = bits & possible, 0
+        while remaining:
+            if remaining & 1:
+                writers = tuple(index for index, (_, mask) in enumerate(exact) if mask >> bit & 1)
+                if writers not in verdict:
+                    verdict[writers] = _covers(
+                        [exact[index][0] for index in writers],
+                        lambda guard: ir.evaluate_guard(guard, lookup),
+                    )
+                if not verdict[writers]:
+                    exposed |= 1 << bit
+            remaining >>= 1
+            bit += 1
+        return exposed
+
+    def _unselected(
+        self, guard: ir.Guard, assign: GuardedAssign, signal: str, when: str
+    ) -> str:
+        """Why a read inside ``assign`` is not selected."""
+        if guard.kind is ir.GuardKind.INDEX:
+            return (
+                f"`{assign.text}` does not read {self._trace_path(signal)}: the index "
+                f"`{guard.text}` is not {guard.element} {when}."
+            )
+        return (
+            f"`?:` arm of `{assign.text}` is not selected: {ir.describe_guard(guard)} is false "
+            f"{when}."
+        )
+
+    @staticmethod
+    def _unresolved(guard: ir.Guard, assign: GuardedAssign, when: str) -> str:
+        """Why the selection of a read inside ``assign`` is unknown."""
+        if guard.kind is ir.GuardKind.INDEX:
+            return (
+                f"The element `{assign.text}` reads is unknown: the index `{guard.text}` is "
+                f"unknown {when}, so every element is kept."
+            )
+        return f"`?:` selection in `{assign.text}` is unknown: `{guard.text}` is unknown {when}."
 
     def _judge_decision(
         self, decision: _Decision, signal: str, lookup: ir.Lookup, when: str
     ) -> tuple[BranchStatus, str]:
-        """Status of the control dependence on one ``if`` or ``case`` construct."""
+        """Status of the control dependence on one ``if``, ``case``, or index selection."""
         guard = decision.guard
         is_case = guard.kind in (ir.GuardKind.CASE_ITEM, ir.GuardKind.CASE_DEFAULT)
         label = "Case selector" if is_case else "Condition"
+        if guard.kind is ir.GuardKind.INDEX:
+            label = "Index"
         enclosing = fs.tri_and(*decision.prefix)
         if enclosing is Tri.FALSE:
             outer = decision.prefix_guards[decision.prefix.index(Tri.FALSE)]
@@ -923,11 +1149,18 @@ class _Slicer:
             end_line=max(span.end_line, guard_span.end_line),
         )
 
-    def _held(self, signal: str, drivers: tuple[Driver, ...], cycle: int) -> bool:
-        """True when no assignment to ``signal`` can have executed at that clock edge."""
+    def _held(self, signal: str, drivers: tuple[Driver, ...], cycle: int, demand: int) -> bool:
+        """True when ``signal`` provably held at that clock edge, so a carry may skip it.
+
+        Assignments that write no ``demand`` bit are ignored, but the whole
+        value must be unchanged: a carry edge joins equal whole-signal values
+        (spec section 6.2).
+        """
         lookup = self._lookup(cycle, SamplingPhase.BEFORE)
         for driver in drivers:
             for assign in driver.assigns:
+                if not self._written(assign, signal)[0] & demand:
+                    continue
                 guards = [ir.evaluate_guard(guard, lookup) for guard in assign.guards]
                 if fs.tri_and(*guards) is not Tri.FALSE:
                     return False
@@ -957,10 +1190,13 @@ class _Slicer:
                 continue
             if any(other.decision != guard.decision for other in opening):
                 continue
-            if ir.signals_of(guard.predicate) != (reset,):
+            # Inside a child instance the reset arrives through ports: compare through aliases.
+            canonical = self._design.canonical
+            reads = ir.signals_of(guard.predicate)
+            if len(reads) != 1 or canonical(reads[0]) != canonical(reset):
                 continue
             taken = fs.truth(
-                ir.evaluate(guard.predicate, lambda name: Vec(active) if name == reset else None)
+                ir.evaluate(guard.predicate, lambda name: Vec(active) if name == reads[0] else None)
             )
             if taken is Tri.UNKNOWN:
                 continue
@@ -1040,24 +1276,25 @@ class _Slicer:
                 "to the edge that wrote it.",
             )
             return
+        demand = self._demand.get(key, self._full(signal))
         limit = self._options.max_cycles_back
         if not self._options.expand_holds:
             # Never scan past the depth limit: the work stays bounded by it.
             floor = 0 if limit is None else self._anchor_cycle - limit
-            # Holds already scanned for this signal are reused, so tracing a held value
+            # Holds already scanned for these bits are reused, so tracing a held value
             # from every cycle of a long window stays linear in the window.
             scanned: list[int] = []
             while source_cycle > 0 and source_cycle >= floor:
-                known = self._hold_origins.get((signal, source_cycle))
+                known = self._hold_origins.get((signal, demand, source_cycle))
                 if known is not None:
                     source_cycle = known
                     break
-                if not self._held(signal, drivers, source_cycle):
+                if not self._held(signal, drivers, source_cycle, demand):
                     break
                 scanned.append(source_cycle)
                 source_cycle -= 1
             for start in scanned:
-                self._hold_origins[(signal, start)] = source_cycle
+                self._hold_origins[(signal, demand, start)] = source_cycle
         if limit is not None and self._anchor_cycle - source_cycle > limit:
             self._stop(
                 node,
@@ -1086,6 +1323,7 @@ class _Slicer:
             BranchStatus.RETAINED,
             f"Carry: the value of {path} settled at the cycle {source_cycle} clock edge is "
             f"unchanged before the cycle {cycle} clock edge.",
+            demand,
         )
 
     # ---- report ---------------------------------------------------------
