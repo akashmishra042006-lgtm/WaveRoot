@@ -68,3 +68,28 @@ anchor. Exits non-zero if any documented verdict is contradicted or a required
 simulator is missing. Localization (rank of the mutated line from Track B, measured not tuned, with
 denominators) is reported for the Track A run; the grader is read only after
 analysis. Fixture causal data is never counted.
+
+## Held-out schedules (C07)
+
+`benchmarks/held_out/generate.py` writes five seeded schedules per case
+(`stim/held_out_01..05.stim`, registered in each manifest with
+`"held_out": true`) with alternate data and stall patterns; `--check` fails if
+the committed files differ from what the seeds produce. The generator never runs
+a simulator or a mutant. Its only feedback is the reference model, which
+rejects degenerate stimulus (a handshake epoch with no transfer).
+
+```sh
+uv run python -m benchmarks.release_evidence --held-out --out /tmp/evidence
+```
+
+reports, with denominators: correct variant passes (must be all), mutant
+detection as *observed* (no expectation was chosen), Track A vs self-check
+agreement on status and first anchor, and Track B localization over the
+detected mutants. It exits non-zero on a false alarm, an errored run or an
+engine disagreement. It takes about 15 minutes (80 simulator runs on top of the
+authored matrix).
+
+Limits: same four designs and mutations; written by the session that built the
+tools, so held out from tuning, not from authorship; a reviewer should replace
+or add profiles in `PROFILES`. Do not re-seed or adjust schedules after seeing
+results; add new profiles instead and report both.

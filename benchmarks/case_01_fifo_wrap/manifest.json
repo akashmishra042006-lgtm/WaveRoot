@@ -56,6 +56,26 @@
       "stim": "stim/reset_midway.stim",
       "mutant_detected": false,
       "note": "masking control: neither epoch reaches a pointer wrap"
+    },
+    "held_out_01": {
+      "stim": "stim/held_out_01.stim",
+      "held_out": true
+    },
+    "held_out_02": {
+      "stim": "stim/held_out_02.stim",
+      "held_out": true
+    },
+    "held_out_03": {
+      "stim": "stim/held_out_03.stim",
+      "held_out": true
+    },
+    "held_out_04": {
+      "stim": "stim/held_out_04.stim",
+      "held_out": true
+    },
+    "held_out_05": {
+      "stim": "stim/held_out_05.stim",
+      "held_out": true
     }
   },
   "analysis_inputs": {
@@ -70,7 +90,12 @@
       "stim/directed.stim",
       "stim/multi_wrap.stim",
       "stim/full_hold.stim",
-      "stim/reset_midway.stim"
+      "stim/reset_midway.stim",
+      "stim/held_out_01.stim",
+      "stim/held_out_02.stim",
+      "stim/held_out_03.stim",
+      "stim/held_out_04.stim",
+      "stim/held_out_05.stim"
     ]
   },
   "control_inputs": {

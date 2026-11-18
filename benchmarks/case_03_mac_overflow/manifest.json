@@ -63,6 +63,26 @@
       "stim": "stim/reset_flush.stim",
       "mutant_detected": false,
       "note": "masking control: products stay small in both epochs"
+    },
+    "held_out_01": {
+      "stim": "stim/held_out_01.stim",
+      "held_out": true
+    },
+    "held_out_02": {
+      "stim": "stim/held_out_02.stim",
+      "held_out": true
+    },
+    "held_out_03": {
+      "stim": "stim/held_out_03.stim",
+      "held_out": true
+    },
+    "held_out_04": {
+      "stim": "stim/held_out_04.stim",
+      "held_out": true
+    },
+    "held_out_05": {
+      "stim": "stim/held_out_05.stim",
+      "held_out": true
     }
   },
   "analysis_inputs": {
@@ -78,7 +98,12 @@
       "stim/pos_saturation.stim",
       "stim/neg_boundary.stim",
       "stim/mixed_bubbles.stim",
-      "stim/reset_flush.stim"
+      "stim/reset_flush.stim",
+      "stim/held_out_01.stim",
+      "stim/held_out_02.stim",
+      "stim/held_out_03.stim",
+      "stim/held_out_04.stim",
+      "stim/held_out_05.stim"
     ]
   },
   "control_inputs": {

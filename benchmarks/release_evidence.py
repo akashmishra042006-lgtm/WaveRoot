@@ -215,6 +215,8 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--out", type=Path, default=None)
     ap.add_argument("--engines", type=parse_engines, default="track-a,self-check")
+    ap.add_argument("--held-out", action="store_true",
+                    help="also run the generated held-out schedules on both engines (adds ~80 simulator runs)")
     args = ap.parse_args(argv)
     out = (args.out or Path(tempfile.mkdtemp(prefix="waveroot-evidence-"))).resolve()
     out.mkdir(parents=True, exist_ok=True)
@@ -228,11 +230,25 @@ def main(argv: list[str] | None = None) -> int:
         print(f"evidence invalid: {exc}", file=sys.stderr)
         return 2
     summary = summarize(rows)
-    (out / "evidence.json").write_text(json.dumps({"meta": meta, "summary": summary, "rows": [r.__dict__ for r in rows]}, indent=2))
     text = markdown(rows, summary, meta)
+    payload: dict[str, object] = {"meta": meta, "summary": summary, "rows": [r.__dict__ for r in rows]}
+    held_ok = True
+    if args.held_out:
+        from benchmarks.held_out import report as held
+
+        try:
+            held_rows = held.run_held_out(out)
+        except StaleGraderError as exc:
+            print(f"evidence invalid: {exc}", file=sys.stderr)
+            return 2
+        text += held.markdown(held_rows)
+        payload["held_out"] = {"summary": held.summarize(held_rows), "rows": [r.__dict__ for r in held_rows],
+                               "problems": held.problems(held_rows)}
+        held_ok = not held.problems(held_rows)
+    (out / "evidence.json").write_text(json.dumps(payload, indent=2))
     (out / "evidence.md").write_text(text)
     print(text)
-    return 0 if all(r.ok for r in rows) else 1
+    return 0 if all(r.ok for r in rows) and held_ok else 1
 
 
 if __name__ == "__main__":
