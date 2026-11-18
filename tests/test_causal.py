@@ -630,9 +630,10 @@ def test_unsupported_constructs_are_reported_and_never_dropped(tmp_path: Path) -
     ]:
         (driver,) = design.drivers[signal]
         assert driver.unsupported is not None and fragment in driver.unsupported
-    # The loop body is not modeled, but its target keeps a dependence on what it reads.
+    # A loop is outside the modeled subset, so its driver stops the slice (PR #6 round 4).
+    # The structural graph still keeps the dependence on what it reads.
     (loop,) = design.drivers["loop"]
-    assert loop.unsupported is None
+    assert loop.unsupported is not None and "ForLoop" in loop.unsupported
     assert not loop.assigns[0].full_write
     assert set(ir.signals_of(loop.assigns[0].rhs)) == {"a", "en"}
     assert loop.assigns[0].guards[-1].kind is ir.GuardKind.UNSUPPORTED
@@ -2154,3 +2155,168 @@ def test_round3_m5_hold_scans_stay_linear(tmp_path: Path, monkeypatch: pytest.Mo
     # Linear work grows about 4x for 4x the cycles; the quadratic scan grew about 16x.
     assert large < 6 * small, (small, large)
     assert large < 4 * 400, large
+
+
+# ---- PR #6 review round 4 (Astra re-audit at 8ac6cd0): the modeled subset -----
+
+
+def stops_at_driver(report: CausalReport) -> bool:
+    """The slice stopped at an unsupported driver and pruned nothing."""
+    return (
+        report.truncated
+        and "UNSUPPORTED_DRIVER" in codes(report)
+        and not any(edge.branch is BranchStatus.PRUNED for edge in report.edges)
+    )
+
+
+def test_round4_r1_nonblocking_write_in_a_combinational_process_stops(tmp_path: Path) -> None:
+    """``t <= s`` lands after the process runs, so ``t ? a : b`` read the old t."""
+    design = build(
+        tmp_path,
+        "module m (input logic s, a, b, output logic y);\n"
+        "  logic t;\n"
+        "  always_comb begin\n"
+        "    t <= s;\n"
+        "    y = t ? a : b;\n"
+        "  end\n"
+        "endmodule\n",
+    )
+    (driver,) = design.drivers["y"]
+    assert driver.unsupported is not None and "nonblocking" in driver.unsupported
+    report = slice_failure(
+        failure_at("y", 2, 25000, actual="1", expected="0"),
+        static_provider({"s": "0", "t": "0", "a": "1", "b": "0", "y": "1"}),
+        design,
+        OPTIONS,
+    )
+    assert stops_at_driver(report)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "  task automatic set_y();\n    y = a;\n  endtask\n"
+        "  always_comb begin\n    y = 1'b0;\n    set_y();\n  end\n",
+        "  function automatic logic f();\n    return a;\n  endfunction\n"
+        "  assign y = 1'($countones(f()));\n",
+    ],
+    ids=["task-call", "function-inside-system-call"],
+)
+def test_round4_r2_subroutine_calls_stop_the_slice(tmp_path: Path, body: str) -> None:
+    """A task or function body reads a; that dependence is invisible, so the slice stops."""
+    design = build(tmp_path, f"module m (input logic a, output logic y);\n{body}endmodule\n")
+    (driver,) = design.drivers["y"]
+    assert driver.unsupported is not None
+    report = slice_failure(
+        failure_at("y", 2, 25000, actual="1", expected="0"),
+        static_provider({"a": "1", "y": "1"}),
+        design,
+        OPTIONS,
+    )
+    assert stops_at_driver(report)
+
+
+def test_round4_r3_iff_qualified_level_event_stops_the_slice(tmp_path: Path) -> None:
+    """With en = 0 the process never wakes, so y keeps a value from an earlier a."""
+    design = build(
+        tmp_path,
+        "module m (input logic a, en, output logic y);\n"
+        "  always @(a iff en) y = a;\n"
+        "endmodule\n",
+    )
+    (driver,) = design.drivers["y"]
+    assert driver.unsupported is not None and "iff" in driver.unsupported
+    report = slice_failure(
+        failure_at("y", 2, 25000, actual="1", expected="0"),
+        static_provider({"a": "0", "en": "0", "y": "1"}),
+        design,
+        OPTIONS,
+    )
+    assert stops_at_driver(report)
+
+
+def test_round4_r4_driver_inside_a_generate_block_stops_the_slice(tmp_path: Path) -> None:
+    design = build(
+        tmp_path,
+        "module m (input logic a, b, output logic y);\n"
+        "  assign y = a;\n"
+        "  if (1) begin : g\n"
+        "    assign y = b;\n"
+        "  end\n"
+        "  if (0) begin : dead\n"
+        "    assign y = a;\n"
+        "  end\n"
+        "endmodule\n",
+    )
+    kinds = sorted(driver.process.value for driver in design.drivers["y"])
+    # The uninstantiated block drives nothing, so only one scope driver is added.
+    assert kinds == ["assign", "scope"]
+    report = slice_failure(
+        failure_at("y", 2, 25000, actual="x", expected="0"),
+        static_provider({"a": "0", "b": "1", "y": "x"}),
+        design,
+        OPTIONS,
+    )
+    assert report.truncated and "UNSUPPORTED_DRIVER" in codes(report)
+    assert "UNSUPPORTED_SCOPE" in {diagnostic.code for diagnostic in design.diagnostics}
+    assert has_node(report, "a"), "the traversed driver is still followed"
+
+
+@pytest.mark.parametrize(
+    ("body", "fragment"),
+    [
+        ("  always_comb y = $past(a);\n", "$past"),
+        (
+            "  always_comb begin\n    automatic logic t;\n    t = a;\n    y = t;\n  end\n",
+            "other than a signal",
+        ),
+        (
+            "  always_comb begin\n    y = 1'b0;\n    for (int i = 0; i < 1; i++) y = a;\n  end\n",
+            "ForLoop",
+        ),
+        ("  always_comb case (a) inside\n    1'b1: y = 1'b1;\n    default: y = 1'b0;\n"
+         "  endcase\n", "inside"),
+    ],
+    ids=["temporal-system-call", "local-variable", "loop", "case-inside"],
+)
+def test_round4_constructs_outside_the_subset_make_the_driver_unsupported(
+    tmp_path: Path, body: str, fragment: str
+) -> None:
+    design = build(
+        tmp_path,
+        "module m (input logic clk, a, output logic y);\n"
+        f"{body}"
+        "endmodule\n",
+    )
+    (driver,) = design.drivers["y"]
+    assert driver.unsupported is not None and fragment in driver.unsupported
+
+
+def test_round4_the_modeled_subset_is_still_traced(tmp_path: Path) -> None:
+    """Control: the allowlisted forms keep their drivers and slice as before."""
+    design = build(
+        tmp_path,
+        "module m (input logic clk, en, input logic [3:0] a, b, output logic [3:0] q, y, z);\n"
+        "  localparam int W = 4;\n"
+        "  always_ff @(posedge clk) if (en) q <= a;\n"
+        "  always_comb begin\n"
+        "    unique case (en)\n"
+        "      1'b1: y = a;\n"
+        "      default: y = b;\n"
+        "    endcase\n"
+        "  end\n"
+        "  always @* z = W'($countones(a)) + W'($clog2(W));\n"
+        "endmodule\n",
+    )
+    for signal in ("q", "y", "z"):
+        assert all(driver.unsupported is None for driver in design.drivers[signal]), signal
+    report = slice_failure(
+        failure_at("y", 2, 25000, actual="1010", expected="0101"),
+        static_provider({"en": "1", "a": "1010", "b": "0101", "y": "1010"}),
+        design,
+        OPTIONS,
+    )
+    assert not report.truncated
+    assert branches(edges_of(report, ("b", 2, SETTLED), ("y", 2, SETTLED))) == {
+        BranchStatus.PRUNED
+    }

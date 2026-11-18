@@ -19,24 +19,39 @@ is background. Where they differ, the spec wins.
 | `src/causal/sva_synth.py` | `synthesize_assertion`: candidate checker module plus `bind` for the top suspect. |
 | `tests/test_causal.py` | 73 engine tests against `MockWaveformProvider`. |
 
-Supported today: one flat module; `assign`; net declaration assignments;
-`always_comb`; `always @*`; `always_ff` and `always @(posedge clk)` with one
-clock; `if`; `case`, `casez`, `casex`; `?:`; packed vectors; constant and
-indexed part-selects; packed struct field reads; parameters and enum values;
-concatenated assignment targets.
+The engine models an **allowlist** (PR #6 review round 4). Every driver
+outside it is an unsupported driver: the slice stops there with `truncated`
+and `UNSUPPORTED_DRIVER`, and nothing is pruned. A gap in the subset therefore
+costs coverage, never a wrong answer (spec §12). The subset:
 
-Reported but not traversed (the slice stops there and sets `truncated`):
-module instances, generate blocks, asynchronous reset or several edge events,
-`always_latch`, blocking assignments inside a clocked process, undriven
-internal signals, calls to user-defined functions (their bodies may read
-signals that are not arguments), and level-sensitive event lists that do not
-name every signal the process reads.
+- Processes: one flat module's continuous `assign` and net declaration
+  assignments; `always_ff` and `always @(posedge|negedge clk)` on one one-bit
+  clock with nonblocking assignments; `always_comb` and `always @*` with
+  blocking assignments only. A plain level-sensitive list (`@(a or b)`, no
+  `iff`, whole signals only) that names every signal the process reads counts
+  as `always @*`.
+- Statements: blocks, `if` / `else` (including `unique` and `priority`),
+  `case`, `casez`, `casex`, assignments to this module's signals.
+- Expressions: this module's signals, parameters, and enum values; operators;
+  `?:`; packed vectors; constant and indexed part-selects; packed struct
+  field reads; concatenations; casts; `$signed`, `$unsigned`, and the pure
+  system functions in `ast_graph._PURE_SYSTEM_CALLS`.
 
-Kept as unknown dependencies (every operand is retained, nothing is
-evaluated): loops and other unmodeled statements, `inside`, system function
-calls other than `$signed` and `$unsigned`, unpacked arrays, unpacked structs.
-A level-sensitive event list that names every signal the process reads is
-treated exactly like `always @*`.
+Refused, with the reason in `Driver.unsupported`: module instances, generate
+blocks, instance arrays, gate primitives, and checkers (every module signal
+they may write gets a `scope` driver); asynchronous reset or several edge
+events; `iff`; `always_latch`; blocking assignments in a clocked process;
+nonblocking assignments in a combinational process; intra-assignment delays;
+incomplete event lists; user-defined function and task calls; other system
+calls (`$past`, `$random`, ...); loops, waits, and every other statement;
+pattern conditions and `case ... inside`; local and automatic variables and
+other names that are not this module's signals. Undriven internal signals
+also end the slice.
+
+Inside the subset, operators that are not evaluated (for example `inside`
+or `**`) and pure system functions keep every operand as a dependence; the
+value is unknown and no guard that contains them prunes. Unpacked arrays and
+unpacked structs are kept the same way.
 
 ### 1.1 How the slicer treats time
 
@@ -102,9 +117,9 @@ boundary. Track C must pass both from the manifest.
   every possible arm writes. A process that writes only parts of a signal is
   therefore never proven here; B-03's bit tracking narrows this to the bits
   the slice follows.
-- A process with an intra-assignment delay (`q <= #1 d`), a call to a
-  user-defined function, or an incomplete level-sensitive event list is an
-  unsupported driver; the slice stops there.
+- Any driver outside the modeled subset (section 1) is an unsupported
+  driver; the slice stops there. Widen the subset only together with tests
+  that check the new construct against simulation.
 - `max_cycles_back` bounds the hold scan as well as the slice, and
   `max_nodes` bounds the report: no node is added past it.
 - A hold scan is remembered per signal and start cycle, so tracing a held
