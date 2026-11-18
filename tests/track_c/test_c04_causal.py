@@ -109,3 +109,27 @@ def test_cli_analyze_localizes_by_default_and_none_opts_out(tmp_path: Path, caps
     rec = json.loads(capsys.readouterr().out)
     assert rec["causal"] is None and rec["causal_adapter"] is None
     assert "CAUSAL_UNAVAILABLE" in [d["code"] for d in rec["diagnostics"]]
+
+
+@pytest.mark.integration
+def test_unexpected_engine_error_keeps_the_failure_verdict(tmp_path: Path) -> None:
+    """A Track B bug must degrade to a diagnostic, not discard the verdict."""
+    from src.app.adapters import CausalAdapter  # noqa: F401  (protocol shape)
+
+    class Boom:
+        name = "boom"
+        kind = "analysis"
+
+        def analyze(self, *a, **k):  # type: ignore[no-untyped-def]
+            raise KeyError("internal")
+
+    from src.app import service as svc
+
+    case = CASES[0]
+    if shutil.which("iverilog") is None and shutil.which("verilator") is None:
+        pytest.fail("simulator required")
+    outcome = AnalysisService(Runner(tmp_path / "a", Limits(wall_clock_s=180)), WaveformComparison(), Boom()).analyze(  # type: ignore[arg-type]
+        case.directory / "manifest.json", variant="mutant", schedule="directed")
+    assert outcome.status is AnalysisStatus.FAIL and outcome.causal is None
+    assert any(d.code == "CAUSAL_FAILED" and "KeyError" in d.message for d in outcome.diagnostics)
+    assert svc is not None

@@ -383,6 +383,11 @@ class AnalysisService:
                     outcome.causal = self.causal.analyze(failure, run, sources, context)
                 except AdapterError as exc:
                     outcome.diagnostics.append(Diagnostic(code="CAUSAL_FAILED", message=str(exc)))
+                except Exception as exc:  # noqa: BLE001 - an engine bug must not discard the verdict
+                    outcome.diagnostics.append(Diagnostic(
+                        code="CAUSAL_FAILED",
+                        message=f"causal analysis failed unexpectedly ({type(exc).__name__}: {exc}); "
+                                "the failure verdict is unaffected"))
         return self._finish(outcome)
 
     # -- helpers --------------------------------------------------------
