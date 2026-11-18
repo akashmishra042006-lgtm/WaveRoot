@@ -83,6 +83,15 @@ def main() -> int:
             expect(page.get_by_test_id("real-badge")).to_be_visible()
             print("live run: fail at TOP.tb.dut.full, 55000 ps")
 
+            # Track B's real report: ranked suspects, and the source behind the
+            # first one served by the API and hash-verified in the browser.
+            suspects = page.locator('[data-testid^="suspect-"]')
+            expect(suspects.first).to_be_visible()
+            suspects.first.click()
+            expect(page.get_by_test_id("source-verified")).to_be_visible(timeout=15000)
+            expect(page.get_by_test_id("source-location")).to_contain_text("fifo.sv")
+            print(f"live causal: {suspects.count()} suspect(s), first source verified")
+
             # 3. Cancel a second run from the UI.
             page.get_by_test_id("run-start").click()
             expect(page.get_by_test_id("run-cancel")).to_be_enabled(timeout=15000)

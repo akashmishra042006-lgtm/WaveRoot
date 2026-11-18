@@ -54,7 +54,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Final, Protocol, cast
 
-from src.app.adapters import SelfCheckComparison, WaveformComparison
+from src.app.adapters import SelfCheckComparison, TrackBCausal, WaveformComparison
 from src.app.runner import Limits, PathEscapeError, Runner, resolve_inside
 from src.app.service import AnalysisOutcome, AnalysisService, ManifestError, load_manifest
 
@@ -378,7 +378,7 @@ class ApiServer:
     def _default_factory(self, comparison: str) -> _Service:
         adapter = WaveformComparison() if comparison == "track-a" else SelfCheckComparison()
         runner = Runner(self._artifacts, Limits(wall_clock_s=self.config.timeout_s))
-        return AnalysisService(runner, adapter)
+        return AnalysisService(runner, adapter, TrackBCausal())
 
 
 class _Handler(BaseHTTPRequestHandler):

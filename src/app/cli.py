@@ -30,7 +30,14 @@ from pathlib import Path
 from types import FrameType
 
 from src.app.api import DEFAULT_DEV_ORIGINS, ApiConfig, ApiServer
-from src.app.adapters import ComparisonAdapter, FixtureCausal, SelfCheckComparison, WaveformComparison
+from src.app.adapters import (
+    CausalAdapter,
+    ComparisonAdapter,
+    FixtureCausal,
+    SelfCheckComparison,
+    TrackBCausal,
+    WaveformComparison,
+)
 from src.app.runner import Limits, Runner
 from src.app.service import EXIT_CODES, AnalysisOutcome, AnalysisService, load_report
 from src.contracts import AnalysisStatus
@@ -62,6 +69,9 @@ def _parser() -> argparse.ArgumentParser:
     analyze.add_argument("--fixture-causal", type=Path, metavar="MOCK_FIXTURE_JSON",
                          help="explicit fixture mode: attach a hand-authored causal report "
                               "(labeled synthetic; refused unless it matches the failure)")
+    analyze.add_argument("--causal", choices=("track-b", "none"), default="track-b",
+                         help="track-b: Track B's causal engine on a failing run (default); none: report "
+                              "the failure unlocalized. Ignored when --fixture-causal is given")
     analyze.add_argument("--comparison", choices=("track-a", "self-check"), default="track-a",
                          help="track-a: Track A's waveform engine (default); self-check: Track C's "
                               "benchmark checker over testbench samples")
@@ -198,12 +208,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         if ignored:
             parser.error(f"{', '.join(ignored)} apply only to --comparison track-a")
         comparison = SelfCheckComparison()
-    causal = FixtureCausal(args.fixture_causal) if args.fixture_causal else None
+    causal: CausalAdapter | None
+    if args.fixture_causal:
+        causal = FixtureCausal(args.fixture_causal)
+    else:
+        causal = TrackBCausal() if args.causal == "track-b" else None
     service = AnalysisService(
         Runner(args.artifacts, Limits(wall_clock_s=args.timeout)),
         comparison,
         causal,
-        fixture_mode=causal is not None,
+        fixture_mode=bool(args.fixture_causal),
     )
     cancel = threading.Event()
 

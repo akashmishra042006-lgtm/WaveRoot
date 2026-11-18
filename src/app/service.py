@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final, Literal, cast
 
-from src.app.adapters import AdapterError, CausalAdapter, ComparisonAdapter
+from src.app.adapters import AdapterError, CausalAdapter, CausalContext, ComparisonAdapter
 from src.app.runner import (
     PathEscapeError,
     RunRecord,
@@ -100,6 +100,10 @@ class CaseManifest:
     golden_module: str
     modes: tuple[ComparisonMode, ...]
     primary_mode: ComparisonMode
+    top: str | None = None
+    dut_instance: str | None = None
+    reset_path: str | None = None
+    reset_active: str | None = None
 
     @property
     def directory(self) -> Path:
@@ -168,6 +172,13 @@ def load_manifest(path: Path) -> CaseManifest:
         raise ManifestError(f"golden mode: {exc}") from exc
     if primary not in modes:
         raise ManifestError("golden.primary_mode must be one of golden.modes")
+    reset = data.get("reset")
+    reset_obj = cast(Mapping[str, object], reset) if isinstance(reset, dict) else {}
+
+    def opt(obj: Mapping[str, object], key: str) -> str | None:
+        v = obj.get(key)
+        return v if isinstance(v, str) and v else None
+
     return CaseManifest(
         case_id=case_id,
         path=path,
@@ -178,6 +189,10 @@ def load_manifest(path: Path) -> CaseManifest:
         golden_module=module,
         modes=modes,
         primary_mode=primary,
+        top=opt(data, "top"),
+        dut_instance=opt(data, "dut_instance"),
+        reset_path=opt(reset_obj, "path"),
+        reset_active=opt(reset_obj, "active"),
     )
 
 
@@ -357,7 +372,15 @@ class AnalysisService:
             else:
                 try:
                     sources = [manifest.directory / p for p in manifest.rtl[cast(Variant, variant)]]
-                    outcome.causal = self.causal.analyze(failure, run, sources)
+                    context = CausalContext(
+                        case_id=manifest.case_id,
+                        root=manifest.directory,
+                        top=manifest.top,
+                        dut_instance=manifest.dut_instance,
+                        reset_path=manifest.reset_path,
+                        reset_active=manifest.reset_active,
+                    )
+                    outcome.causal = self.causal.analyze(failure, run, sources, context)
                 except AdapterError as exc:
                     outcome.diagnostics.append(Diagnostic(code="CAUSAL_FAILED", message=str(exc)))
         return self._finish(outcome)

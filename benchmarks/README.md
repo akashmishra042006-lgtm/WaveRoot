@@ -65,5 +65,6 @@ both Track A's comparison and the benchmark self-check, and writes
 `evidence.md` / `evidence.json`: detection, masking controls, and
 correct-variant replay as counts with denominators, plus every detected
 anchor. Exits non-zero if any documented verdict is contradicted or a required
-simulator is missing. Localization stays `unranked` until a real causal adapter
-is wired in (C04 part 2); fixture causal data is never counted.
+simulator is missing. Localization (rank of the mutated line from Track B, measured not tuned, with
+denominators) is reported for the Track A run; the grader is read only after
+analysis. Fixture causal data is never counted.

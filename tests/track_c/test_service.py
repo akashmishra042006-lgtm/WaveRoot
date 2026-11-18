@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from src.app import cli
-from src.app.adapters import AdapterError, FixtureCausal, SelfCheckComparison
+from src.app.adapters import AdapterError, CausalContext, FixtureCausal, SelfCheckComparison
 from src.app.runner import RunRecord, RunStatus, SimRequest
 from src.app.service import (
     AnalysisService,
@@ -36,6 +36,7 @@ REPO = Path(__file__).resolve().parent.parent.parent
 FIFO_MANIFEST = REPO / "benchmarks" / "case_01_fifo_wrap" / "manifest.json"
 ALU_MANIFEST = REPO / "benchmarks" / "case_04_alu_xprop" / "manifest.json"
 MOCK_FIXTURE = REPO / "tests" / "fixtures" / "mock_fifo_failure.json"
+CTX = CausalContext("case", REPO, None, None, None, None)
 
 
 class StubRunner:
@@ -192,7 +193,7 @@ def test_fixture_causal_refuses_a_different_failure(tmp_path: Path) -> None:
     )
     record = RunRecord(RunStatus.OK, tmp_path, "")
     with pytest.raises(AdapterError):
-        FixtureCausal(MOCK_FIXTURE).analyze(other, record, [])
+        FixtureCausal(MOCK_FIXTURE).analyze(other, record, [], CTX)
 
 
 # ----------------------------------------------------------------------
@@ -270,7 +271,10 @@ class TestCliEndToEnd:
         # Anchors use the detected hierarchy; Verilator versions differ, spec 5.1.
         assert failure["signal_path"] == record["run"]["trace_scope_prefix"] + "tb.dut.full"
         assert failure["observation"] == {"epoch": 0, "cycle": 3, "phase": "settled", "time_ps": "55000"}
-        assert [d["code"] for d in record["diagnostics"]] == ["CAUSAL_UNAVAILABLE"]
+        # Track B localizes by default; nothing is reported as unavailable.
+        assert record["diagnostics"] == []
+        assert record["causal_adapter"] == {"name": "track_b_causal", "kind": "analysis"}
+        assert record["causal"]["provenance"]["kind"] == "analysis"
         # The saved record re-validates and keeps the same exit code.
         saved = next(tmp_path.glob("*/report.json"))
         assert cli.main(["open", str(saved)]) == 1
