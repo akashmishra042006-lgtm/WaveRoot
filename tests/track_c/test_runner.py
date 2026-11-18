@@ -10,11 +10,14 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
 
 import pytest
+
+import src.app.runner as runner_module
 
 from src.app.runner import Limits, Runner, RunStatus, SimRequest, resolve_inside, PathEscapeError
 
@@ -107,7 +110,7 @@ def processes_mentioning(fragment: str) -> list[str]:
 def test_process_probe_sees_long_command_lines(tmp_path: Path) -> None:
     """Guard for the helper itself: it must find a process by a long path."""
     marker = tmp_path / ("x" * 150)
-    probe = subprocess.Popen(["sh", "-c", f"sleep 30 # {marker}"])
+    probe = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)", str(marker)])
     try:
         time.sleep(0.2)
         assert processes_mentioning(str(marker)), "ps output is truncated"
@@ -182,8 +185,28 @@ class TestMissingTool:
 # ----------------------------------------------------------------------
 
 
+@pytest.fixture(params=["waitid", "poll"])
+def exit_backend(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> str:
+    """Run process-control tests with both exit detectors. ``poll`` is what
+    macOS uses (no os.waitid); forcing it here exercises it on Linux."""
+    if request.param == "waitid" and not hasattr(os, "waitid"):
+        pytest.skip("os.waitid is not available on this platform")
+    monkeypatch.setattr(runner_module, "_HAVE_WAITID", request.param == "waitid")
+    return str(request.param)
+
+
+def test_exit_detection_works_without_waitid(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The platform without os.waitid must not crash on the first step."""
+    monkeypatch.setattr(runner_module, "_HAVE_WAITID", False)
+    proc = subprocess.Popen(["sleep", "0.2"], start_new_session=True)
+    assert runner_module._exited(proc) is False
+    proc.wait()
+    assert runner_module._exited(proc) is True
+
+
 @pytest.mark.integration
 @needs_icarus
+@pytest.mark.usefixtures("exit_backend")
 class TestProcessOutcomes:
     def test_build_failure_is_distinct(self, tmp_path: Path) -> None:
         req = make_case(tmp_path / "case", "module tb(; endmodule\n")
@@ -290,3 +313,27 @@ class TestProcessOutcomes:
         assert isinstance(steps, list) and all(isinstance(s["argv"], list) for s in steps)
         hashes = data["inputs_sha256"]
         assert isinstance(hashes, dict) and set(hashes) == {"tb.sv", "s.stim"}
+
+
+@pytest.mark.usefixtures("exit_backend")
+@pytest.mark.parametrize("mode", ["success", "failure", "timeout", "cancel"])
+def test_exit_backends_without_simulator(mode: str, tmp_path: Path) -> None:
+    """Both detectors exercise real processes even without simulator tools."""
+    cancel = threading.Event()
+    if mode == "cancel":
+        cancel.set()
+    script = "import time; time.sleep(30)" if mode in ("timeout", "cancel") else (
+        "import sys; print('runner probe', flush=True); sys.exit(7)" if mode == "failure"
+        else "print('runner probe', flush=True)"
+    )
+    deadline = time.monotonic() + (0.15 if mode == "timeout" else 5)
+    result = Runner(tmp_path / "artifacts")._execute(
+        "probe", (sys.executable, "-c", script), tmp_path, deadline, cancel, None,
+    )
+    if mode in ("timeout", "cancel"):
+        assert result.outcome is not None
+        assert result.outcome[0] is (RunStatus.TIMEOUT if mode == "timeout" else RunStatus.CANCELLED)
+    else:
+        assert result.outcome is None
+        assert result.step.exit_code == (7 if mode == "failure" else 0)
+        assert "runner probe" in (tmp_path / result.step.log).read_text()

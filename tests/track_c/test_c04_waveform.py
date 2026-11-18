@@ -242,7 +242,7 @@ class TestTrackAThroughTheCli:
         assert code == 1
         assert record["comparison_adapter"]["kind"] == "analysis"  # type: ignore[index]
         failure = record["comparisons"]["cycle"]["failure"]  # type: ignore[index]
-        assert failure["signal_path"] == "TOP.tb.dut.full"
+        assert failure["signal_path"] == record["run"]["trace_scope_prefix"] + "tb.dut.full"
         assert failure["observation"] == {"epoch": 0, "cycle": 3, "phase": "settled", "time_ps": "55000"}
 
     def test_correct_variant_passes(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

@@ -85,6 +85,17 @@ def large_report(path: Path) -> None:
     path.write_text(json.dumps(mock))
 
 
+def cpu_name() -> str:
+    """Best-effort CPU model for the report; /proc exists only on Linux."""
+    try:
+        for line in Path("/proc/cpuinfo").read_text().splitlines():
+            if line.startswith("model name"):
+                return line.split(":", 1)[1].strip()
+    except OSError:
+        pass
+    return platform.processor() or platform.machine() or "unknown"
+
+
 def overlaps_at_rest(page: Any) -> list[str]:
     """Overlapping controls, measured with the page scrolled to the top.
 
@@ -106,7 +117,7 @@ def main(out: Path) -> int:
         results["machine"] = {
             "browser": browser.version,
             "platform": platform.platform(),
-            "cpu": next((l.split(":", 1)[1].strip() for l in Path("/proc/cpuinfo").read_text().splitlines() if l.startswith("model name")), "unknown"),
+            "cpu": cpu_name(),
         }
         for width in WIDTHS:
             page = browser.new_page(viewport={"width": width, "height": 900})

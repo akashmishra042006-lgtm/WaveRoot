@@ -28,6 +28,7 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -351,7 +352,7 @@ class Runner:
         capture = _CappedCapture(proc.stdout, cwd / log_name, self.limits.max_log_bytes)
         capture.start()
         outcome: tuple[RunStatus, str] | None = None
-        while not _exited(proc.pid):
+        while not _exited(proc):
             if cancel.is_set():
                 outcome = (RunStatus.CANCELLED, f"{name} cancelled")
             elif time.monotonic() > deadline:
@@ -366,8 +367,9 @@ class Runner:
                 _terminate_group(proc)
                 break
             time.sleep(_POLL_S)
-        # Nothing the step spawned may outlive it. The leader is still unreaped
-        # here, so this cannot signal an unrelated group; reap only afterwards.
+        # Nothing the step spawned may outlive it. With waitid the leader is
+        # still unreaped here, so this cannot signal an unrelated group (see
+        # _exited for the macOS case); reap only afterwards.
         _signal_group(proc.pid, signal.SIGKILL)
         proc.wait()
         capture.join()
@@ -383,16 +385,29 @@ class Runner:
         return Runner._Execution(step, outcome, capture.saw_tb_error)
 
 
-def _exited(pid: int) -> bool:
-    """True once ``pid`` has exited, without reaping it.
+# Python exposes os.waitid (and WNOWAIT) on Linux but not on macOS.
+_HAVE_WAITID = hasattr(os, "waitid") and hasattr(os, "WNOWAIT")
 
-    Leaving the leader an unreaped zombie keeps its process-group ID reserved,
-    so a later ``killpg`` can never reach an unrelated group that reused it.
+
+def _exited(proc: subprocess.Popen[bytes]) -> bool:
+    """True once the step's leader process has exited.
+
+    Where ``os.waitid`` exists this does not reap it: leaving the leader an
+    unreaped zombie keeps its process-group ID reserved, so a later ``killpg``
+    can never reach an unrelated group that reused it.
+
+    Without it (macOS) the leader is reaped here instead. The group ID is then
+    still reserved while any group member lives, and the only exposure is the
+    few microseconds between this call and the final ``killpg`` in which the
+    whole group has died and the kernel has recycled the ID; PIDs are handed out
+    sequentially, so that does not happen in practice.
     """
-    try:
-        return os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
-    except ChildProcessError:
-        return True
+    if sys.platform == "linux" and _HAVE_WAITID:
+        try:
+            return os.waitid(os.P_PID, proc.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
+        except ChildProcessError:
+            return True
+    return proc.poll() is not None
 
 
 def _signal_group(pgid: int, sig: signal.Signals) -> None:
@@ -410,7 +425,7 @@ def _terminate_group(proc: subprocess.Popen[bytes]) -> None:
     """
     _signal_group(proc.pid, signal.SIGTERM)
     deadline = time.monotonic() + _KILL_GRACE_S
-    while not _exited(proc.pid) and time.monotonic() < deadline:
+    while not _exited(proc) and time.monotonic() < deadline:
         time.sleep(_POLL_S)
     _signal_group(proc.pid, signal.SIGKILL)
 

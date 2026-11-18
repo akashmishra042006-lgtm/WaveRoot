@@ -528,7 +528,7 @@ class TestRealJobs:
             assert status == 200 and record["status"] == "fail"
             assert record["comparison_adapter"]["kind"] == "analysis"
             failure = record["comparisons"]["cycle"]["failure"]
-            assert failure["signal_path"] == "TOP.tb.dut.full"
+            assert failure["signal_path"] == record["run"]["trace_scope_prefix"] + "tb.dut.full"
             assert failure["observation"]["time_ps"] == "55000"
             assert not Path(record["run"]["run_dir"]).is_absolute()
         finally:
