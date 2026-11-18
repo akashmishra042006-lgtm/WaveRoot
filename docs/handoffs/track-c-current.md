@@ -33,11 +33,15 @@ wins.
 
 ## Not verified / known limits
 
-- **macOS has never run the suite.** #24 replaces `os.waitid` (absent in
-  Python on macOS) with `Popen.poll()`; Linux tests force that path, but a Mac
-  must run `uv run pytest -m integration` before anyone relies on it. The
-  fallback reaps the leader before the final group kill; a recycled process-
-  group ID in that window is theoretical, not observed.
+- **macOS (one run, one machine).** hasaninan18 ran `main` at 6265572 on macOS 26
+  arm64 (Python 3.12, Verilator 5.054, Icarus 13.0): `mypy src/` clean,
+  687 unit passed, integration 92 passed / 11 skipped / 1 failed in 13.5 min.
+  The 11 skips are the Linux-only `os.waitid` runner variants, so the
+  `Popen.poll()` path ran for every real simulator job there. The one failure is
+  `test_waveform_fst.py` needing GTKWave's `vcd2fst`/`fst2vcd` (fails by design
+  when absent; Track A's). Different simulator versions than Linux (5.054 writes
+  no `TOP.` scope; tests now use the detected prefix). Not covered: Windows, and
+  macOS with GTKWave installed.
 - Case 3 (MAC) reports Track B's `SVA_LATENCY_ASSUMED`: the generated assertion
   assumes an output latency. Decide whether the manifest should declare it.
 - The causal step has no wall-clock limit and does not check cancellation. It
@@ -60,8 +64,8 @@ wins.
 
 ## Next single ticket
 
-Run `uv run pytest -m integration` on a Mac and confirm #24. Then decide the
-case-3 latency question with Track B. Release notes must say: 4 authored cases,
+Decide the case-3 latency question with Track B. (The Mac check of #24 is
+done; the `SourceFile.path` question is going to a separate spec PR.) Release notes must say: 4 authored cases,
 mutated line in the top 2 for all four, no held-out accuracy claim.
 
 ---
