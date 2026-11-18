@@ -59,7 +59,23 @@ def _anchor(outcome) -> str:  # type: ignore[no-untyped-def]
     return f"{f.mode.value} {f.signal_path} epoch {o.epoch} cycle {o.cycle} {o.phase.value} @{o.time_ps}ps"
 
 
+def validate_engines(engines: tuple[str, ...]) -> tuple[str, ...]:
+    if not engines or any(engine not in ("track-a", "self-check") for engine in engines):
+        raise ValueError("engines must be a non-empty selection of track-a,self-check")
+    if len(set(engines)) != len(engines):
+        raise ValueError("duplicate engines would double-count release evidence")
+    return engines
+
+
+def parse_engines(value: str) -> tuple[str, ...]:
+    try:
+        return validate_engines(tuple(part.strip() for part in value.split(",")))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+
+
 def run(out: Path, engines: tuple[str, ...]) -> tuple[list[Row], dict[str, object]]:
+    validate_engines(engines)
     rows: list[Row] = []
     for engine in engines:
         comparison = WaveformComparison() if engine == "track-a" else SelfCheckComparison()
@@ -133,7 +149,7 @@ def markdown(rows: list[Row], summary: dict[str, object], meta: dict[str, object
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--out", type=Path, default=None)
-    ap.add_argument("--engines", default="track-a,self-check")
+    ap.add_argument("--engines", type=parse_engines, default="track-a,self-check")
     args = ap.parse_args(argv)
     out = (args.out or Path(tempfile.mkdtemp(prefix="waveroot-evidence-"))).resolve()
     out.mkdir(parents=True, exist_ok=True)
@@ -141,7 +157,7 @@ def main(argv: list[str] | None = None) -> int:
     if missing:
         print(f"required simulator missing: {', '.join(missing)} (hard gate, not a skip)", file=sys.stderr)
         return 2
-    rows, meta = run(out, tuple(args.engines.split(",")))
+    rows, meta = run(out, args.engines)
     summary = summarize(rows)
     (out / "evidence.json").write_text(json.dumps({"meta": meta, "summary": summary, "rows": [r.__dict__ for r in rows]}, indent=2))
     text = markdown(rows, summary, meta)
