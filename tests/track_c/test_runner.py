@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+import src.app.runner as runner_module
+
 from src.app.runner import Limits, Runner, RunStatus, SimRequest, resolve_inside, PathEscapeError
 
 STIM = "1 1 11 0\n"
@@ -182,8 +184,28 @@ class TestMissingTool:
 # ----------------------------------------------------------------------
 
 
+@pytest.fixture(params=["waitid", "poll"])
+def exit_backend(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> str:
+    """Run process-control tests with both exit detectors. ``poll`` is what
+    macOS uses (no os.waitid); forcing it here exercises it on Linux."""
+    if request.param == "waitid" and not hasattr(os, "waitid"):
+        pytest.skip("os.waitid is not available on this platform")
+    monkeypatch.setattr(runner_module, "_HAVE_WAITID", request.param == "waitid")
+    return str(request.param)
+
+
+def test_exit_detection_works_without_waitid(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The platform without os.waitid must not crash on the first step."""
+    monkeypatch.setattr(runner_module, "_HAVE_WAITID", False)
+    proc = subprocess.Popen(["sleep", "0.2"], start_new_session=True)
+    assert runner_module._exited(proc) is False
+    proc.wait()
+    assert runner_module._exited(proc) is True
+
+
 @pytest.mark.integration
 @needs_icarus
+@pytest.mark.usefixtures("exit_backend")
 class TestProcessOutcomes:
     def test_build_failure_is_distinct(self, tmp_path: Path) -> None:
         req = make_case(tmp_path / "case", "module tb(; endmodule\n")
