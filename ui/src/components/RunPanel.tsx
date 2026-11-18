@@ -27,6 +27,8 @@ export function RunPanel({ client, pollMs = 300, onResult }: Props) {
   const [variant, setVariant] = useState<"correct" | "mutant">("mutant");
   const [schedule, setSchedule] = useState("");
   const [comparison, setComparison] = useState<"track-a" | "self-check">("track-a");
+  const [submitting, setSubmitting] = useState(false);
+  const submissionPending = useRef(false);
   const [job, setJob] = useState<JobInfo | null>(null);
   const [error, setError] = useState("");
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -110,14 +112,22 @@ export function RunPanel({ client, pollMs = 300, onResult }: Props) {
   }, [client, finish, pollMs]);
 
   const run = async () => {
+    if (submissionPending.current) return;
+    submissionPending.current = true;
+    setSubmitting(true);
     setError("");
     try {
       const started = await client.createJob({ case_id: caseId, variant, schedule, comparison });
+      if (!live.current) return;
       setJob(started);
       poll(started.id);
     } catch (err) {
+      if (!live.current) return;
       setError(err instanceof Error ? err.message : String(err));
       if (err instanceof ApiError && err.kind === "offline") setService({ kind: "offline", message: err.message });
+    } finally {
+      submissionPending.current = false;
+      if (live.current) setSubmitting(false);
     }
   };
 
@@ -148,7 +158,7 @@ export function RunPanel({ client, pollMs = 300, onResult }: Props) {
       {service.kind === "online" && (
         <div className="run-controls">
           <label className="select"><span>Benchmark</span>
-            <select value={caseId} disabled={active} data-testid="run-case"
+            <select value={caseId} disabled={active || submitting} data-testid="run-case"
               onChange={(e) => {
                 setCaseId(e.target.value);
                 setSchedule(service.cases.find((c) => c.case_id === e.target.value)?.schedules[0] ?? "");
@@ -157,25 +167,25 @@ export function RunPanel({ client, pollMs = 300, onResult }: Props) {
             </select>
           </label>
           <label className="select"><span>Variant</span>
-            <select value={variant} disabled={active} data-testid="run-variant"
+            <select value={variant} disabled={active || submitting} data-testid="run-variant"
               onChange={(e) => setVariant(e.target.value as "correct" | "mutant")}>
               <option value="mutant">mutant</option><option value="correct">correct</option>
             </select>
           </label>
           <label className="select"><span>Schedule</span>
-            <select value={schedule} disabled={active} data-testid="run-schedule" onChange={(e) => setSchedule(e.target.value)}>
+            <select value={schedule} disabled={active || submitting} data-testid="run-schedule" onChange={(e) => setSchedule(e.target.value)}>
               {(selected?.schedules ?? []).map((s) => <option key={s} value={s}>{s}</option>)}
             </select>
           </label>
           <label className="select"><span>Comparison</span>
-            <select value={comparison} disabled={active} data-testid="run-comparison"
+            <select value={comparison} disabled={active || submitting} data-testid="run-comparison"
               onChange={(e) => setComparison(e.target.value as "track-a" | "self-check")}>
               <option value="track-a">Track A waveform engine</option>
               <option value="self-check">Benchmark self-check</option>
             </select>
           </label>
-          <button type="button" className="primary" disabled={active || !caseId || !schedule} onClick={() => void run()} data-testid="run-start">
-            Run analysis
+          <button type="button" className="primary" disabled={active || submitting || !caseId || !schedule} onClick={() => void run()} data-testid="run-start">
+            {submitting ? "Submitting…" : "Run analysis"}
           </button>
           <button type="button" disabled={!active || job?.state === "cancelling"} onClick={() => void cancel()} data-testid="run-cancel">
             Cancel
