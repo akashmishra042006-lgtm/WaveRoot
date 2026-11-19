@@ -15,10 +15,11 @@ is background. Where they differ, the spec wins.
 | `src/causal/fourstate.py` | Four-state vector arithmetic (`Vec`, `Tri`, operators, `case_match`). |
 | `src/causal/expr.py` | Immutable expression IR, `evaluate`, `Guard`, `collect_reads`, printing. |
 | `src/causal/ast_graph.py` | `build_design_graph`: pyslang elaboration lowered to a `DesignGraph` (signals, per-signal `Driver` lists of `GuardedAssign`, flat `StructuralEdge` list). |
-| `src/causal/backward_slicer.py` | `slice_failure`, `analyze_comparison`: time-unrolled, value-pruned backward BFS that returns a `CausalReport`. |
+| `src/causal/backward_slicer.py` | `analyze_failure` (the single entry point Track C calls, C04 part 2), `slice_failure`, `analyze_comparison`: time-unrolled, value-pruned backward BFS that returns a `CausalReport`. `SourceFile.path` is relative to the `root` the caller passes (spec decision 13). |
 | `src/causal/sva_synth.py` | `synthesize_assertion`: candidate checker module plus `bind` for the top suspect. |
 | `src/causal/graph_io.py` | `dump_design_graph`, `load_design_graph`, `verify_sources` (B-04): deterministic JSON form of a `DesignGraph`, format version 1, internal to Track B. |
-| `tests/test_causal.py` | Engine tests against `MockWaveformProvider`: 73 for the first engine, 121 after B-01 to B-04. |
+| `tests/test_causal.py` | Engine tests against `MockWaveformProvider`: 73 for the first engine, 121 after B-01 to B-04, 165 after the PR #6 review rounds, `analyze_failure`, and B-12. |
+| `tests/test_e2e_benchmarks.py` | Real-simulator benchmark runs (Verilator, Icarus) that pin the mutated line's rank per case. Needs an LF checkout (see section 3). |
 
 The engine models an **allowlist** (PR #6 review round 4). Every driver
 outside it is an unsupported driver: the slice stops there with `truncated`
@@ -97,6 +98,13 @@ edge `T - T_clk`". The spec forbids assuming a clock period (sections 6.1,
   wrote it: one `combinational` carry edge. Cycles where every write guard is
   false are skipped; `SliceOptions.expand_holds` disables the skipping.
 - `before` at cycle 0 is the epoch boundary and ends the slice.
+- A carry must start from a `settled` value, so the hold at the cycle 0 edge
+  cannot be skipped like later ones. Instead, a register `settled` at cycle 0
+  whose demanded bits provably held through that edge takes the origin of the
+  value before cycle 0: the reset branch when it never assigns the register,
+  otherwise the epoch boundary (B-12). Before B-12 that one hold added a
+  storage boundary, so its unmet condition outranked the missing reset
+  assignment whenever the failure came after cycle 0.
 
 Do not reintroduce period arithmetic anywhere.
 
@@ -123,6 +131,27 @@ names the reset, such a register is now located at the reset branch: the
 condition line through the branch's last assignment. Nothing is detected by
 name, so without `reset_path` and `reset_active` the value stays an epoch
 boundary. Track C must pass both from the manifest.
+
+#### Known limit: a defect that fails to change a bit, seen much later
+
+Ranking prefers the most recent logic (fewer storage boundaries). A defect
+whose effect stays latent through later, correct writes therefore drops. The
+held-out schedules of C07 (#30) show it on case 01: the mutant
+`wptr <= {wptr[2], 2'b00}` fails to toggle `wptr[2]`. When later `wptr + 1`
+writes come between the wrap and the failure, line 40 (the last write) ranks
+first and line 38 drops to 5th or 10th. Crediting each bit to the assignment
+that last changed it does not help: line 38 never changed `wptr[2]` (that is the
+bug), and the later `+1` writes only copy it, so per-bit crediting points back
+to reset. In the mutant, lines 38 and 40 both copy `wptr[2]`; no data-flow rule
+singles out 38 without knowing an internal reference value, which the golden
+model does not provide. Do not tune the ranking to the held-out schedules. A
+real fix would need a new idea (for example, which statements could have
+written a different value to the wrong bit) and its own ticket.
+
+Held-out localization before B-12 (Track C, #30, run once): over 17 detected
+mutants, top-1 6, top-2 12, top-5 15. B-12 changes case 04's ordering, so case
+04's held-out rows are no longer held out for B-12; report any rerun as
+post-change.
 
 ### 1.3 What the slicer refuses to guess
 
@@ -190,10 +219,15 @@ These are not tickets for Track B to execute alone. Raise them with Dev 1.
 
 | Item | Why it matters | Owner |
 | --- | --- | --- |
-| Add `pyslang` to `pyproject.toml` and `uv.lock` | The engine imports `pyslang` (developed against 12.1.0). It is installed in the local environment only, so `uv sync --locked` removes it and `tests/test_causal.py` then fails at import. This must land before the branch merges. | Dev 1, focused PR on shared files |
-| Line endings and source hashes | `SourceFile.sha256` is the hash of the file's bytes. On a Windows checkout with `core.autocrlf=true`, `tests/fixtures/mock_fifo_wrap.sv` hashes to `54b129d2...`; the LF form hashes to `76726bf9...`, which is what the fixture JSON records. A `.gitattributes` rule (`*.sv text eol=lf`) would make hashes identical on every platform. | Dev 1 |
+| Line endings and source hashes | `SourceFile.sha256` is the hash of the file's bytes. On a Windows checkout with `core.autocrlf=true`, `tests/fixtures/mock_fifo_wrap.sv` hashes to `54b129d2...`; the LF form hashes to `76726bf9...`, which is what the fixture JSON records. The benchmark RTL has the same problem, so the mutant cases of `tests/test_e2e_benchmarks.py` fail on such a checkout and pass on an LF clone. A `.gitattributes` rule (`*.sv text eol=lf`) would make hashes identical on every platform. Still open. | Dev 1 |
 | Trace names for array elements and unpacked struct fields | Tickets B-02 and B-03 need to know the path a provider gives `mem[2]` or `s.field`. The spec's path grammar allows `mem[2]`; simulators differ in what they dump. | Track A with Dev 1 |
-| `trace_scope`, reset path, and reset polarity | `FailureAnchor` carries none of these. Track C must pass them in `SliceOptions` from its manifest and the golden header. | Track C |
+| No wall-clock limit or cancellation in the causal step | Under 10 ms on the benchmarks, but a trace near the 256 MB cap could block the API's single worker (Track C handoff). A deadline in `SliceOptions` would be Track B's part. | Track C with Track B |
+
+Resolved: `pyslang` is a locked runtime dependency (#14). Track C passes
+`trace_scope`, `reset_path`, and `reset_active` from the manifest (#27).
+`SourceFile.path` is relative to the analysis source root (spec decision 13,
+#29). `SVA_LATENCY_ASSUMED` stays a diagnostic; the manifest gets no latency
+field (agreed with Track C on #30).
 
 ## 4. Tickets
 
@@ -395,6 +429,7 @@ Listed in suggested order. Write a full ticket before starting any of them.
 | B-09 | Functions | Inline pure functions, or keep a conservative summary. |
 | B-10 | Assertion validation | Run the candidate in a simulator and set `validated` or `failed` with the tool name. Needs Track C's simulator runs. |
 | B-11 | Slice past a dump gap | `CLOCK_EDGES_UNAVAILABLE` confines the slice to the failing cycle. Query edges after the last gap instead. |
+| B-12 | Hold at the cycle 0 edge (done) | A register settled at cycle 0 that provably held through that edge takes the origin of its value before cycle 0, as holds at later edges already did through the carry skip. Found from Track C's held-out run of case 04 (#30); tested on a made-up design (section 1.1). |
 
 Out of scope for schema 1, per `spec.md` section 1.2: several clock domains,
 asynchronous reset analysis, latches, delays.

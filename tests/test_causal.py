@@ -12,6 +12,7 @@ data, so nothing here compares against it. Only its trace and failure are used.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import random
@@ -910,8 +911,9 @@ def test_fifo_top_suspect_is_the_wrap_assignment(fifo_report: CausalReport) -> N
     lines = [suspect.location.line for suspect in suspects if suspect.location is not None]
     assert lines[:4] == [38, 23, 42, 40]
     assert len(set(lines)) == len(lines), "one suspect per source location"
-    # Module inputs are where the slice ends, so they rank after every RTL statement.
-    assert lines[-1] == 6 and "module input" in suspects[-1].reason
+    # Places where the slice ends rank after every RTL statement. The last one here is
+    # rptr's value from before the epoch: it held through the cycle 0 edge (B-12).
+    assert lines[-1] == 17 and "established by reset" in suspects[-1].reason
     for suspect in suspects:
         assert suspect.evidence_node_ids[0] == suspect.node_id
         assert suspect.evidence_node_ids[-1] == fifo_report.anchor_node_id
@@ -1670,8 +1672,12 @@ def test_disabled_register_holds_and_carries_to_the_epoch_boundary(dut: DesignGr
     assert data.branch is BranchStatus.PRUNED
     (carry,) = edges_of(report, ("q", 0, SETTLED), ("q", 2, BEFORE))
     assert carry.edge_type is EdgeType.COMBINATIONAL
-    boundary = node_of(report, "q", 0, BEFORE)
+    # q also held through the cycle 0 edge, so its settled value there is the epoch
+    # boundary itself (B-12): nothing feeds it.
+    boundary = node_of(report, "q", 0, SETTLED)
     assert boundary.id not in {edge.target for edge in report.edges}
+    assert not any(node.observation.phase is BEFORE and node.observation.cycle == 0
+                   and node.signal_path == f"{SCOPE}.q" for node in report.nodes)
     assert not report.truncated
     held = report.suspects[0]
     assert "held 4'b0011" in held.reason
@@ -2891,6 +2897,101 @@ def test_unreset_register_is_located_at_the_reset_branch(tmp_path: Path) -> None
     boundary = next(s for s in plain.suspects if s.node_id == node_of(plain, "sel_q", 0, BEFORE).id)
     assert boundary.location is not None
     assert boundary.location.line == _line_of(ALU_SV, "logic sel_q;")
+
+
+def test_b12_hold_at_cycle_0_is_skipped_like_any_other_hold(tmp_path: Path) -> None:
+    """B-12: sel_q holds its unreset x through cycles 0 and 1 and is read at cycle 2.
+
+    Provable holds are skipped by one carry edge. A carry must start from a settled
+    value, so the hold at the cycle 0 edge cannot be skipped the same way; its
+    settled node takes the value's origin instead. The missing reset assignment
+    then ranks ahead of the ``if (cfg_we)`` that merely kept the x.
+    """
+    design = build(tmp_path, ALU_SV, "alu.sv")
+    provider = static_provider(
+        {"a": "00000000", "b": "11111111", "cfg_we": "0", "cfg_sel": "0", "sel_q": "x"},
+        changing={
+            "rst_n": [(0, "0"), (20000, "1")],
+            "in_valid": [(0, "0"), (40000, "1")],
+            "out_valid": [(0, "x"), (5000, "0"), (45000, "1")],
+            "out_data": [(0, "x" * 8), (5000, "0" * 8), (45000, "x" * 8)],
+        },
+        edges=(5000, 15000, 25000, 35000, 45000),
+    )
+    failure = failure_at("out_data", 2, 45000, actual="x" * 8, expected="0" * 8)
+    options = SliceOptions(trace_scope=SCOPE, reset_path="tb.dut.rst_n", reset_active="0")
+    report = slice_failure(failure, provider, design, options)
+
+    def at(rep: CausalReport, cycle: int, phase: SamplingPhase) -> bool:
+        return any(
+            n.signal_path == f"{SCOPE}.sel_q"
+            and n.observation.cycle == cycle
+            and n.observation.phase is phase
+            for n in rep.nodes
+        )
+
+    (carry,) = edges_of(report, ("sel_q", 0, SETTLED), ("sel_q", 2, BEFORE))
+    assert carry.reason.startswith("Carry")
+    origin = node_of(report, "sel_q", 0, SETTLED)
+    assert origin.id not in {edge.target for edge in report.edges}
+    assert not at(report, 0, BEFORE)
+    second = report.suspects[1]
+    assert second.node_id == origin.id
+    assert second.location is not None
+    assert second.location.line == _line_of(ALU_SV, "if (!rst_n)")
+    assert "reset branch of its clocked process does not assign it" in second.reason
+    assert "1 storage boundary" in second.reason
+    hold_line = _line_of(ALU_SV, "if (cfg_we)")
+    assert all(s.location is None or s.location.line != hold_line for s in report.suspects)
+    assert CausalReport.model_validate_json(report.model_dump_json()) == report
+
+    # The origin depends only on the bits demanded at that node, never on which path
+    # reached it first: see test_b12_wider_demand_undoes_the_cycle_0_origin.
+
+    # expand_holds still exposes every hold, the one at cycle 0 included.
+    stepped = slice_failure(
+        failure, provider, design, dataclasses.replace(options, expand_holds=True)
+    )
+    assert at(stepped, 0, SETTLED)
+
+
+def test_b12_wider_demand_undoes_the_cycle_0_origin(tmp_path: Path) -> None:
+    """r[3:2] held through the cycle 0 edge but r[1:0] was written there.
+
+    ``a`` reads the high half at cycle 2 and reaches r settled at cycle 0 first,
+    where the high half provably held, so that node first takes the value from
+    before cycle 0. ``b2`` reads the low half one stage deeper, widening the demand
+    on the same node; it is expanded again and the cycle 0 write of r[1:0] counts.
+    """
+    design = build(
+        tmp_path,
+        "module m (input logic clk, input logic en_lo, en_hi, input logic [3:0] d,\n"
+        "          output logic [1:0] y);\n"
+        "  logic [3:0] r;\n"
+        "  logic [1:0] a, b, b2;\n"
+        "  always_ff @(posedge clk) begin\n"
+        "    if (en_lo) r[1:0] <= d[1:0];\n"
+        "    if (en_hi) r[3:2] <= d[3:2];\n"
+        "    a <= r[3:2];\n"
+        "    b <= r[1:0];\n"
+        "    b2 <= b;\n"
+        "  end\n"
+        "  assign y = a ^ b2;\n"
+        "endmodule\n",
+    )
+    provider = static_provider(
+        {"en_hi": "0", "d": "0101", "r": "0101", "a": "01", "b": "01", "b2": "01", "y": "00"},
+        changing={"en_lo": [(0, "1"), (10000, "0")]},
+    )
+    report = slice_failure(
+        failure_at("y", 2, 25000, actual="00", expected="11"), provider, design, OPTIONS
+    )
+    r0 = node_of(report, "r", 0, SETTLED)
+    assert r0.id in {edge.target for edge in report.edges}
+    assert has_node(report, "d") and has_node(report, "en_lo")
+    (write,) = [s for s in report.suspects if s.node_id == r0.id]
+    assert write.reason.startswith("`r[1:0] <= d[1:0]` executed at the cycle 0 clock edge")
+    assert CausalReport.model_validate_json(report.model_dump_json()) == report
 
 
 # --------------------------------------------------------------------------
