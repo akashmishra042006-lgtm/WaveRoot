@@ -42,6 +42,20 @@ wins.
   MAC always ranks line 23 (the clamp) above line 22 (the mutated compare) and
   reports `SVA_LATENCY_ASSUMED` on every detected run, authored and held-out.
 
+- **API access token (open item 5; PR after
+  #32).** Every route but `GET /api/health` and CORS preflight needs
+  `Authorization: Bearer <token>`; the token is random per `serve` start,
+  printed with a ready `?api=...#token=...` link, optionally written to a
+  0600 `--token-file`, and compared in constant time. Host/Origin guards are
+  unchanged. The UI reads the token from the URL fragment (never sent to a
+  server), clears it from the address bar, sends it as a header, and shows a
+  "needs its access token" state on 401 instead of "offline". Tests:
+  `tests/track_c/test_api.py` (every protected route x missing/wrong/other
+  scheme/empty token; mutation-checked), `ui/src/test/api.test.tsx`, and
+  `ui/scripts/live_check.py` (refused without the token, full run with it,
+  token gone from the address bar). The live check also no longer leaves
+  `vite preview` running: it stops npm's whole process group.
+
 ## What was verified, and how
 
 - Linux, Verilator 5.020 and Icarus 12.0: `uv run mypy src/` clean (24 files);
@@ -92,12 +106,10 @@ wins.
   macOS with GTKWave installed.
 - Case 3 (MAC) reports Track B's `SVA_LATENCY_ASSUMED`: the generated assertion
   assumes an output latency. Decide whether the manifest should declare it.
-- The causal step has no wall-clock limit and does not check cancellation. It
-  costs under 10 ms on the current cases; a trace near the 256 MB cap could
-  block the API's single worker. A wrong `reset.active` in a manifest gives no
-  warning.
-- The API has no authentication: any local program can use it. Host/Origin
-  guards stop web pages and other hosts only.
+- (Fixed Nov 19, #32: the causal step is bounded and cancellable; a manifest
+  `reset` contradicting its golden model is refused.)
+- API access token (Nov 19): stops other local users and stray local clients,
+  not the user's own processes, which can read the terminal or the token file.
 - Fixture causal data (`FixtureCausal`) is never evidence; real runs use
   `TrackBCausal`, and `analyze --causal none` reports a failure unlocalized.
 
@@ -262,7 +274,7 @@ http only). Tests: `tests/track_c/test_api.py`, `ui/src/test/api.test.tsx`, and
 including a UI cancel; runs in CI's simulators job).
 
 Default origins: only the server's own; `serve --dev` adds Vite dev/preview,
-`--allow-origin` adds others. Limits to know: no authentication (any local program can use the API; the
+`--allow-origin` adds others. Limits to know (as of Nov 16; a per-start access token was added Nov 19): no authentication (any local program can use the API; the
 guards stop web pages and other hosts); one job at a time by default; job
 records live in memory and are lost on restart (run directories on disk
 remain); the UI serves no built bundle itself (use `vite preview` or `dev`,

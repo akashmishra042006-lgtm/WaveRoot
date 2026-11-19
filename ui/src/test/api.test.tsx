@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { App } from "../App";
 import {
-  ApiClient, ApiError, apiBaseFromLocation, fetchDeclaredSources,
+  ApiClient, ApiError, TOKEN_HELP, apiBaseFromLocation, fetchDeclaredSources, tokenFromHash,
   type JobInfo, type JobState,
 } from "../api/client";
 import { SAMPLES } from "../samples";
@@ -43,6 +43,15 @@ describe("the local service is optional", () => {
     await user.selectOptions(screen.getByTestId("sample-select"), "real-fifo-fail");
     expect(await screen.findByTestId("run-title")).toBeInTheDocument();
     expect(screen.getByTestId("service-offline")).toBeInTheDocument();
+  });
+
+  it("asks for the access token when the service refuses without it", async () => {
+    const cases = vi.fn().mockRejectedValue(new ApiError(TOKEN_HELP, "refused", 401, "UNAUTHORIZED"));
+    render(<App client={fakeClient({ cases })} />);
+    const alert = await screen.findByTestId("service-unauthorized");
+    expect(alert).toHaveTextContent("#token=");
+    expect(screen.queryByTestId("service-offline")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("run-start")).not.toBeInTheDocument();
   });
 
   it("retries on request", async () => {
@@ -204,6 +213,31 @@ describe("the client", () => {
     expect(init.method).toBe("POST");
     expect(init.headers).toEqual({ "Content-Type": "application/json" });
     expect(init.cache).toBe("no-store");
+  });
+
+  it("sends the access token as a bearer header, and nothing when there is none", async () => {
+    const token = "t".repeat(43);
+    const fetchImpl = vi.fn().mockImplementation(() => Promise.resolve(ok({ cases: [] })));
+    await new ApiClient("http://127.0.0.1:8765", fetchImpl, token).cases();
+    expect(fetchImpl.mock.calls[0]![1].headers).toEqual({ Authorization: `Bearer ${token}` });
+    await new ApiClient("http://127.0.0.1:8765", fetchImpl).cases();
+    expect(fetchImpl.mock.calls[1]![1].headers).toBeUndefined();
+  });
+
+  it("explains a missing or stale token instead of echoing the server", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: { code: "UNAUTHORIZED", message: "x" } }), { status: 401 }));
+    await expect(new ApiClient("http://127.0.0.1:1", fetchImpl).cases()).rejects.toMatchObject({
+      kind: "refused", status: 401, code: "UNAUTHORIZED", message: TOKEN_HELP,
+    });
+  });
+
+  it("reads the token only from the fragment, and only a plausible one", () => {
+    const token = "A1_-".repeat(10);
+    expect(tokenFromHash(`#token=${token}`)).toBe(token);
+    expect(tokenFromHash(`token=${token}`)).toBe(token);
+    for (const bad of ["", "#", "#token=", "#token=short", `#token=${"a".repeat(40)}%20x`, `#tok=${token}`]) {
+      expect(tokenFromHash(bad)).toBeUndefined();
+    }
   });
 
   it("only ever talks to a loopback http service", () => {

@@ -1,11 +1,16 @@
 """Local HTTP API over the Track C analysis service (C06).
 
-Standard library only. One process, bound to loopback, no authentication: the
-guards below stop *other web pages and other hosts* from driving it, not other
-programs on the same machine.
+Standard library only. One process, bound to loopback. A per-server access
+token stops other programs on the same machine; the Host and Origin guards
+stop other web pages and other hosts.
 
-* Binding: only a loopback IPv4 address is accepted. No authentication: any
-  local program can use the API.
+* Binding: only a loopback IPv4 address is accepted.
+* Every route except ``GET /api/health`` and CORS preflight requires
+  ``Authorization: Bearer <token>``. The token is random per server start
+  (``serve`` prints it, or writes it to a 0600 ``--token-file``) and is
+  compared in constant time. A local program that can read the user's files
+  or the terminal can still obtain it: this is a guard against other local
+  users and stray local clients, not against the user's own processes.
 * ``Host`` must be this server's own loopback name and port (DNS-rebinding
   guard). ``Origin``, when sent, must be this server or an allowed origin;
   creating or cancelling a job *requires* an allowed ``Origin``. Programs that
@@ -39,10 +44,12 @@ Routes::
 from __future__ import annotations
 
 import hashlib
+import hmac
 import ipaddress
 import json
 import logging
 import re
+import secrets
 import threading
 import uuid
 from collections.abc import Callable
@@ -60,6 +67,7 @@ from src.app.service import AnalysisOutcome, AnalysisService, ManifestError, loa
 
 MAX_BODY_BYTES: Final = 4096
 MAX_SOURCE_BYTES: Final = 2_000_000
+MIN_TOKEN_CHARS: Final = 32
 _LOG: Final = logging.getLogger("waveroot.api")
 #: Vite dev/preview origins. Not trusted by default: ``serve --dev`` adds them.
 DEFAULT_DEV_ORIGINS: Final = (
@@ -94,6 +102,8 @@ class ApiConfig:
     timeout_s: float = 180.0
     max_concurrent: int = 1
     max_jobs: int = 64
+    #: Access token; None generates a random one per server start.
+    token: str | None = field(default=None, repr=False)
 
 
 @dataclass
@@ -138,7 +148,10 @@ def _check_loopback(host: str) -> None:
 class ApiServer:
     def __init__(self, config: ApiConfig, service_factory: ServiceFactory | None = None) -> None:
         _check_loopback(config.host)
+        if config.token is not None and (len(config.token) < MIN_TOKEN_CHARS or not config.token.isascii()):
+            raise ValueError(f"the API token must be at least {MIN_TOKEN_CHARS} ASCII characters")
         self.config = config
+        self.token: str = config.token if config.token is not None else secrets.token_urlsafe(32)
         self._root = config.root.resolve(strict=True)
         self._artifacts = config.artifacts.resolve()
         self._factory: ServiceFactory = service_factory or self._default_factory
@@ -395,8 +408,13 @@ class _Handler(BaseHTTPRequestHandler):
     def _origin(self) -> str | None:
         return self.headers.get("Origin")
 
-    def _send(self, status: int, body: bytes, content_type: str, origin: str | None) -> None:
+    def _send(
+        self, status: int, body: bytes, content_type: str, origin: str | None,
+        extra: dict[str, str] | None = None,
+    ) -> None:
         self.send_response(status)
+        for name, value in (extra or {}).items():
+            self.send_header(name, value)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
@@ -407,8 +425,8 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _json(self, status: int, obj: object, origin: str | None) -> None:
-        self._send(status, json.dumps(obj).encode(), "application/json", origin)
+    def _json(self, status: int, obj: object, origin: str | None, extra: dict[str, str] | None = None) -> None:
+        self._send(status, json.dumps(obj).encode(), "application/json", origin, extra)
 
     def _read_json(self) -> object:
         length_text = self.headers.get("Content-Length", "0")
@@ -430,7 +448,7 @@ class _Handler(BaseHTTPRequestHandler):
         except (ValueError, UnicodeDecodeError):
             raise _Refusal(400, "BAD_REQUEST", "the body is not valid JSON") from None
 
-    def _guard(self, method: str) -> str | None:
+    def _guard(self, method: str, path: str) -> str | None:
         """Return the origin to echo in CORS headers, or raise a refusal."""
         api = self.server_api
         host = self.headers.get("Host", "")
@@ -441,19 +459,31 @@ class _Handler(BaseHTTPRequestHandler):
             raise _Refusal(403, "FORBIDDEN_ORIGIN", "this origin may not use the API")
         if method in ("POST", "OPTIONS") and origin is None:
             raise _Refusal(403, "FORBIDDEN_ORIGIN", "an allowed Origin header is required")
+        if method != "OPTIONS" and not (method == "GET" and path == "/api/health"):
+            scheme, _, presented = (self.headers.get("Authorization") or "").partition(" ")
+            if scheme.lower() != "bearer" or not hmac.compare_digest(
+                presented.strip().encode(), api.token.encode()
+            ):
+                raise _Refusal(401, "UNAUTHORIZED", "a valid access token is required (printed by serve)")
         return origin
 
     def _handle(self, method: str) -> None:
         origin: str | None = None
+        path = self.path.split("?", 1)[0]
         try:
-            origin = self._guard(method)
+            origin = self._guard(method, path)
             if method == "OPTIONS":
                 self._preflight(origin)
                 return
-            self._route(method, self.path.split("?", 1)[0], origin)
+            self._route(method, path, origin)
         except _Refusal as refusal:
+            # A 401 keeps CORS headers for an allowed origin so the page can
+            # tell "needs the token" from "service offline".
+            if refusal.status == 401:
+                origin = self._origin() if self._origin() in self.server_api.allowed_origins() else None
             self._json(refusal.status, {"error": {"code": refusal.code, "message": refusal.message}},
-                       origin if refusal.status != 403 else None)
+                       origin if refusal.status != 403 else None,
+                       {"WWW-Authenticate": "Bearer"} if refusal.status == 401 else None)
         except Exception:  # noqa: BLE001 - never leak internals
             self._json(500, {"error": {"code": "INTERNAL", "message": "internal error"}}, origin)
 
@@ -461,7 +491,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_response(HTTPStatus.NO_CONTENT)
         self.send_header("Access-Control-Allow-Origin", str(origin))
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
         self.send_header("Access-Control-Max-Age", "600")
         self.send_header("Vary", "Origin")
         self.send_header("Content-Length", "0")

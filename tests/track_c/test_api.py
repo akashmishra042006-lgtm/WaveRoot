@@ -92,12 +92,20 @@ def server(root: Path, tmp_path: Path, fake: FakeService) -> Iterator[ApiServer]
     srv.stop()
 
 
+_SERVER_TOKEN: Any = object()  # sentinel: send the server's own token
+
+
 def call(
     srv: ApiServer, method: str, path: str, body: object | bytes | None = None, *,
     origin: str | None = ALLOWED, host: str | None = None, content_type: str | None = "application/json",
+    token: str | None = _SERVER_TOKEN, authorization: str | None = None,
 ) -> tuple[int, dict[str, str], bytes]:
     conn = http.client.HTTPConnection("127.0.0.1", srv.port, timeout=10)
     headers: dict[str, str] = {}
+    if authorization is not None:
+        headers["Authorization"] = authorization
+    elif token is not None:
+        headers["Authorization"] = f"Bearer {srv.token if token is _SERVER_TOKEN else token}"
     if origin is not None:
         headers["Origin"] = origin
     if host is not None:
@@ -149,6 +157,94 @@ def test_refuses_to_bind_a_non_loopback_address(root: Path, tmp_path: Path) -> N
     for host in ("0.0.0.0", "::", "192.168.1.5", "example.com"):
         with pytest.raises(ValueError, match="loopback"):
             ApiServer(ApiConfig(root=root, artifacts=tmp_path / "a", host=host))
+
+
+# ----------------------------------------------------------------------
+# Access token: other local programs cannot drive the API
+# ----------------------------------------------------------------------
+
+_JOB_ID = "0" * 32
+PROTECTED = [
+    ("GET", "/api/cases", None),
+    ("POST", "/api/jobs", JOB),
+    ("GET", f"/api/jobs/{_JOB_ID}", None),
+    ("POST", f"/api/jobs/{_JOB_ID}/cancel", {}),
+    ("GET", f"/api/jobs/{_JOB_ID}/result", None),
+    ("GET", f"/api/jobs/{_JOB_ID}/sources/src0", None),
+]
+
+
+@pytest.mark.parametrize(("method", "path", "body"), PROTECTED, ids=lambda v: str(v))
+@pytest.mark.parametrize(
+    "credentials",
+    [{"token": None}, {"token": "x" * 43}, {"authorization": "Basic abc"}, {"authorization": "Bearer"}],
+    ids=["missing", "wrong", "other_scheme", "empty"],
+)
+def test_every_route_but_health_requires_the_token(
+    server: ApiServer, fake: FakeService, method: str, path: str, body: object, credentials: dict[str, Any]
+) -> None:
+    status, headers, data = call(server, method, path, body, **credentials)
+    assert status == 401, data
+    assert headers.get("www-authenticate") == "Bearer"
+    assert json.loads(data)["error"]["code"] == "UNAUTHORIZED"
+    assert server.token.encode() not in data
+    assert fake.calls == []  # nothing ran
+
+
+def test_a_token_with_extra_characters_is_refused(server: ApiServer) -> None:
+    for presented in (server.token + "x", server.token[:-1], " " + server.token + "x"):
+        assert call(server, "GET", "/api/cases", token=presented)[0] == 401
+
+
+def test_health_needs_no_token(server: ApiServer) -> None:
+    assert jcall(server, "GET", "/api/health", token=None) == (200, {"ok": True})
+
+
+def test_unauthorized_keeps_cors_for_an_allowed_origin_only(server: ApiServer) -> None:
+    _s, headers, _d = call(server, "GET", "/api/cases", token=None)
+    assert headers.get("access-control-allow-origin") == ALLOWED  # the page can read "needs token"
+    status, headers, _d = call(server, "GET", "/api/cases", token=None, origin=None)
+    assert status == 401 and "access-control-allow-origin" not in headers
+
+
+def test_host_and_origin_guards_still_apply_with_the_token(server: ApiServer) -> None:
+    assert call(server, "GET", "/api/cases", origin="http://evil.example")[0] == 403
+    assert call(server, "GET", "/api/cases", host="evil.example")[0] == 403
+
+
+def test_preflight_allows_the_authorization_header(server: ApiServer) -> None:
+    status, headers, _d = call(server, "OPTIONS", "/api/jobs", token=None)
+    assert status == 204
+    assert "authorization" in headers["access-control-allow-headers"].lower()
+
+
+def test_each_server_start_gets_a_new_random_token(root: Path, tmp_path: Path) -> None:
+    a, b = make_server(root, tmp_path, None), make_server(root, tmp_path, None)
+    try:
+        assert a.token != b.token and len(a.token) >= 32
+    finally:
+        for srv in (a, b):
+            srv._http.server_close()
+            srv._pool.shutdown()
+
+
+def test_a_configured_token_must_be_long(root: Path, tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="at least 32"):
+        make_server(root, tmp_path, None, token="short")
+
+
+def test_token_file_is_private_and_replaces_a_loose_file(tmp_path: Path) -> None:
+    import os
+    import stat
+
+    from src.app.cli import _write_private
+
+    path = tmp_path / "token"
+    path.write_text("old")
+    path.chmod(0o644)
+    _write_private(path, "secret\n")
+    assert path.read_text() == "secret\n"
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
 
 
 def test_default_service_bounds_the_causal_step(root: Path, tmp_path: Path) -> None:
