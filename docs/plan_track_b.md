@@ -221,13 +221,14 @@ These are not tickets for Track B to execute alone. Raise them with Dev 1.
 | --- | --- | --- |
 | Line endings and source hashes | `SourceFile.sha256` is the hash of the file's bytes. On a Windows checkout with `core.autocrlf=true`, `tests/fixtures/mock_fifo_wrap.sv` hashes to `54b129d2...`; the LF form hashes to `76726bf9...`, which is what the fixture JSON records. The benchmark RTL has the same problem, so the mutant cases of `tests/test_e2e_benchmarks.py` fail on such a checkout and pass on an LF clone. A `.gitattributes` rule (`*.sv text eol=lf`) would make hashes identical on every platform. Still open. | Dev 1 |
 | Trace names for array elements and unpacked struct fields | Tickets B-02 and B-03 need to know the path a provider gives `mem[2]` or `s.field`. The spec's path grammar allows `mem[2]`; simulators differ in what they dump. | Track A with Dev 1 |
-| No wall-clock limit or cancellation in the causal step | Under 10 ms on the benchmarks, but a trace near the 256 MB cap could block the API's single worker (Track C handoff). A deadline in `SliceOptions` would be Track B's part. | Track C with Track B |
 
 Resolved: `pyslang` is a locked runtime dependency (#14). Track C passes
 `trace_scope`, `reset_path`, and `reset_active` from the manifest (#27).
 `SourceFile.path` is relative to the analysis source root (spec decision 13,
 #29). `SVA_LATENCY_ASSUMED` stays a diagnostic; the manifest gets no latency
-field (agreed with Track C on #30).
+field (agreed with Track C on #30). The causal step is bounded by Track C: it
+runs in a child process killed on a wall-clock limit or cancel (#32), so
+`SliceOptions` needs no deadline.
 
 ## 4. Tickets
 
