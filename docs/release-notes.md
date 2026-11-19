@@ -26,8 +26,8 @@ uv run python -m src.app.cli serve --dev     # local API; prints a UI link with 
 npm --prefix ui ci && npm --prefix ui run dev
 ```
 
-There is no `waveroot` console command yet; it needs a focused change to the
-shared `pyproject.toml`.
+After `uv sync`, `uv run waveroot ...` is the same command as
+`uv run python -m src.app.cli ...` (console script added in #37).
 
 ## Results
 
@@ -113,7 +113,10 @@ and MAC held_out_03:
   designs. Independently authored profiles (`PROFILES` in
   `benchmarks/held_out/generate.py`) or new designs are needed before any
   accuracy claim. New profiles are run once and reported alongside these
-  numbers, and nothing is ever re-seeded.
+  numbers, and nothing is ever re-seeded. Profiles 06-08 per case (#39) do not
+  meet this bar either: they were written by the Track B Claude session, which
+  knew the four mutations and had studied the per-row rankings of
+  held_out_01-05.
 - **No human review.** The independent reviews so far were by models: a
   fresh-session cold review of Track C, and a separate model's audit of
   Track B. Neither is a substitute for a human review.
@@ -133,7 +136,14 @@ and MAC held_out_03:
   - macOS had one run on one machine (arm64, Verilator 5.054, Icarus 13.0):
     unit and simulator tests passed, using the `poll()` runner path. Track A's
     FST test was not run there because GTKWave was not installed.
-  - Windows has not been tested.
+  - Windows natively is not supported: the simulator runner uses POSIX-only
+    process and signal calls (`mypy src/` reports them on Windows), and
+    Verilator and Icarus were run only under WSL. Under WSL2 (Ubuntu 26.04,
+    Verilator 5.032, Icarus 12.0) on November 19, 2026: on `main` at 77c6f22
+    plus B-12, `mypy src/` was clean and 700 unit tests and 183 causal,
+    adapter and end-to-end tests passed; on `main` at 432d37a, a UI served
+    from Windows ran four real analyses against the WSL API in Chrome. One
+    machine, one run each.
 - **Not evidence.** Fixture causal data (`--fixture-causal`) is hand-authored
   and labeled synthetic in every output. It is never reported as analysis.
 
@@ -157,4 +167,3 @@ reproduction, not a second observation.
 - Decide the spec §8.1 handshake rule: at least one transfer per epoch.
 - Update the top-level `README.md`. It still says the engines, CLI and UI are
   not implemented.
-- Optional: the console-script entry point, as a focused `pyproject.toml` PR.
