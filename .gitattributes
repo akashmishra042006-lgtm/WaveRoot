@@ -1,0 +1,5 @@
+# Check out every text file with LF line endings on every platform.
+# Source hashes (SourceFile.sha256, benchmark graders, the mock fixture) are
+# hashes of LF bytes; core.autocrlf=true on Windows would otherwise give CRLF
+# working-tree files whose hashes do not match.
+* text=auto eol=lf
