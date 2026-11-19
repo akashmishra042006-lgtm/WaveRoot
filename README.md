@@ -32,10 +32,11 @@ by their owners when implemented.
 They check the shared models and the mock provider only; they are not engine or
 end-to-end coverage.
 
-Run commands from the repository root. This bootstrap uses an unpackaged uv
-project and preserves the team's `src.waveform`, `src.causal`, and `src.app`
-imports. Track C will add packaging and the console entry point when the CLI
-exists. There is no runnable `waveroot` command yet.
+Run commands from the repository root. The project keeps the team's
+`src.waveform`, `src.causal`, and `src.app` imports; `uv sync` installs it in
+editable mode with a `waveroot` command (`uv run waveroot --help`), equivalent
+to `uv run python -m src.app.cli`. It is meant for a checkout: the benchmark
+golden models are imported from the repository.
 
 ## Team ownership
 
