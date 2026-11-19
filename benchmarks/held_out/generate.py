@@ -55,6 +55,14 @@ PROFILES: dict[str, tuple[Profile, ...]] = {
         Profile(0.6, 0.35, 0.8, 0.9),
         Profile(0.9, 1.0, 0.5, 0.5),
         Profile(0.7, 0.8, 0.7, 0.2, reset_at=17),
+        # 06-08 appended 2026-11-19 by the Track B Claude session (see the PR for
+        # what that author knew). 06: producer always offering into a sink that
+        # stalls in long runs, so the queue sits at full under backpressure.
+        # 07: no stickiness on either side, so push and pop coincide at every
+        # occupancy. 08: a one-cycle reset pulse in the middle of heavy traffic.
+        Profile(0.9, 0.95, 0.9, 0.15),
+        Profile(0.1, 0.5, 0.1, 0.5),
+        Profile(0.8, 0.9, 0.5, 0.4, reset_at=9, reset_len=1),
     ),
     "case_02_axi_skid": (
         Profile(0.8, 0.9, 0.6, 0.4),
@@ -62,6 +70,13 @@ PROFILES: dict[str, tuple[Profile, ...]] = {
         Profile(0.6, 0.5, 0.85, 0.8),
         Profile(0.9, 1.0, 0.8, 0.3),
         Profile(0.7, 0.8, 0.5, 0.5, reset_at=15),
+        # 06-08 appended 2026-11-19 by the Track B Claude session. 06: valid held
+        # high while ready is redrawn every cycle, the classic skid-buffer stress.
+        # 07: long ready-low stalls, then release, with near-continuous input.
+        # 08: a one-cycle reset late in the run, with data in flight before drain.
+        Profile(1.0, 1.0, 0.0, 0.5),
+        Profile(0.9, 0.9, 0.95, 0.3),
+        Profile(0.6, 0.7, 0.6, 0.6, reset_at=31, reset_len=1),
     ),
     "case_03_mac_overflow": (
         Profile(0.7, 0.8, 0, 0, data="small"),
@@ -69,6 +84,13 @@ PROFILES: dict[str, tuple[Profile, ...]] = {
         Profile(0.8, 0.9, 0, 0, data="extreme"),
         Profile(0.5, 0.6, 0, 0, data="mixed"),
         Profile(0.7, 0.8, 0, 0, data="extreme", reset_at=14),
+        # 06-08 appended 2026-11-19 by the Track B Claude session. 06: an input
+        # every cycle over the full operand range, for long accumulation chains.
+        # 07: rapidly toggling valid with extreme operands (bubbles between
+        # accumulations). 08: mixed operands with a one-cycle reset late in the run.
+        Profile(1.0, 1.0, 0, 0, data="full"),
+        Profile(0.2, 0.5, 0, 0, data="extreme"),
+        Profile(0.8, 0.9, 0, 0, data="mixed", reset_at=33, reset_len=1),
     ),
     "case_04_alu_xprop": (
         Profile(0.6, 0.7, 0, 0, data="random", config_at=10),
@@ -76,6 +98,14 @@ PROFILES: dict[str, tuple[Profile, ...]] = {
         Profile(0.6, 0.7, 0, 0, data="equal", config_at=8),
         Profile(0.6, 0.7, 0, 0, data="nibble", config_at=6),
         Profile(0.6, 0.7, 0, 0, data="random", config_at=5, reset_at=20),
+        # 06-08 appended 2026-11-19 by the Track B Claude session. 06: configure
+        # on the first cycle, then back-to-back operations. 07: configure, then a
+        # reset before most of the traffic (does configuration survive reset?).
+        # 08: fast-toggling valid, equal operands half the time, selector written
+        # mid-run.
+        Profile(1.0, 1.0, 0, 0, data="random", config_at=0),
+        Profile(0.5, 0.5, 0, 0, data="nibble", config_at=4, reset_at=12, reset_len=3),
+        Profile(0.2, 0.6, 0, 0, data="equal", config_at=20),
     ),
 }
 
