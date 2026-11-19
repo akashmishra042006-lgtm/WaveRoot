@@ -150,7 +150,8 @@ wins.
 
 ## Next single ticket
 
-Draft the release notes. They must say: 4 designs; mutated line in the top 2
+Get Dev 1's review of the draft release notes, `docs/release-notes.md`
+(drafted Nov 19; its "Before tagging" list holds what is still open). They must say: 4 designs; mutated line in the top 2
 for all four authored cases but 12 of 17 detected held-out mutants; FIFO's
 held-out drop is a known localization limit (a missing toggle copied forward),
 not a tuned-away bug; no accuracy claim beyond a smoke suite; held-out from
