@@ -36,7 +36,7 @@ export interface JobRequest {
 }
 
 /** `offline`: the service could not be reached at all. `refused`: it answered
- * with an error (403 origin, 404, 409, ...). */
+ * with an error (401 token, 403 origin, 404, 409, ...). */
 export class ApiError extends Error {
   constructor(message: string, readonly kind: "offline" | "refused", readonly status?: number, readonly code?: string) {
     super(message);
@@ -57,15 +57,32 @@ export function apiBaseFromLocation(search: string, configured?: string): string
   return DEFAULT_API;
 }
 
+/** The access token `serve` prints, passed as `#token=...`. The fragment is
+ * never sent to any server, so the token stays out of request logs. */
+export function tokenFromHash(hash: string): string | undefined {
+  const token = new URLSearchParams(hash.replace(/^#/, "")).get("token");
+  return token && /^[A-Za-z0-9_-]{32,}$/.test(token) ? token : undefined;
+}
+
+export const TOKEN_HELP =
+  "The analysis service needs its access token: open this page with the ?api=...#token=... link that serve prints.";
+
 export class ApiClient {
-  constructor(readonly base: string = DEFAULT_API, private readonly fetchImpl: typeof fetch = (...a) => fetch(...a)) {}
+  constructor(
+    readonly base: string = DEFAULT_API,
+    private readonly fetchImpl: typeof fetch = (...a) => fetch(...a),
+    private readonly token?: string,
+  ) {}
 
   private async request(method: "GET" | "POST", path: string, body?: unknown): Promise<Response> {
     let response: Response;
+    const headers: Record<string, string> = {};
+    if (body !== undefined) headers["Content-Type"] = "application/json";
+    if (this.token) headers["Authorization"] = `Bearer ${this.token}`;
     try {
       response = await this.fetchImpl(this.base + path, {
         method,
-        headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+        headers: Object.keys(headers).length ? headers : undefined,
         body: body === undefined ? undefined : JSON.stringify(body),
         cache: "no-store",
       });
@@ -87,6 +104,7 @@ export class ApiClient {
       } catch {
         // keep the generic message
       }
+      if (response.status === 401) message = TOKEN_HELP;
       throw new ApiError(message, "refused", response.status, code);
     }
     return response;

@@ -8,6 +8,7 @@ import type { SourceText } from "../model/sources";
 type Service =
   | { kind: "checking" }
   | { kind: "offline"; message: string }
+  | { kind: "unauthorized" }
   | { kind: "online"; cases: CaseInfo[] };
 
 interface Props {
@@ -49,6 +50,10 @@ export function RunPanel({ client, pollMs = 300, onResult }: Props) {
       }
     } catch (err) {
       if (!live.current) return;
+      if (err instanceof ApiError && err.status === 401) {
+        setService({ kind: "unauthorized" });
+        return;
+      }
       setService({
         kind: "offline",
         message: err instanceof ApiError ? err.message : `Unexpected error: ${String(err)}`,
@@ -152,6 +157,14 @@ export function RunPanel({ client, pollMs = 300, onResult }: Props) {
         <div role="alert" data-testid="service-offline">
           <strong>Analysis service not available.</strong> {service.message}{" "}
           <span>Start it with <code>{SERVE_COMMAND}</code>. Saved reports still open without it.</span>{" "}
+          <button type="button" onClick={() => void connect()} data-testid="service-retry">Try again</button>
+        </div>
+      )}
+      {service.kind === "unauthorized" && (
+        <div role="alert" data-testid="service-unauthorized">
+          <strong>Analysis service needs its access token.</strong>{" "}
+          <span>Open this page with the <code>?api=...#token=...</code> link that <code>serve</code> prints;
+          the token is new each time the service starts. Saved reports still open without it.</span>{" "}
           <button type="button" onClick={() => void connect()} data-testid="service-retry">Try again</button>
         </div>
       )}

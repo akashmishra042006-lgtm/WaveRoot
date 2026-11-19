@@ -41,6 +41,40 @@ wins.
   reset branch (line 18) when the failure is past cycle 0 (held_out_01, 03).
   MAC always ranks line 23 (the clamp) above line 22 (the mutated compare) and
   reports `SVA_LATENCY_ASSUMED` on every detected run, authored and held-out.
+- **Track B's response (Nov 19, checked on FIFO held_out_01/05, ALU
+  held_out_01, MAC held_out_03).**
+  - FIFO: a known limit, not a ranking bug to tune. The wrong bit is
+    `wptr[2]`, which line 38 never changed (011 -> 000): the defect is a missing
+    toggle, and the later `+1` writes copy the bit too, so "last write that
+    changed the bit" points back to reset. Line 38 ranks lower because it is
+    3 clock edges back and line 40 is 0; in the mutant both only copy
+    `wptr[2]`, and no sound rule picks out 38. (Track C's per-bit suggestion
+    was wrong.) Recorded in Track B's plan as a known limit.
+  - ALU: the order follows Track B's documented ranking rules, but Track B
+    agrees it is the wrong answer: a hold that only keeps an X from an
+    uninitialized register should not outrank the missing reset assignment.
+    Ticket **B-12**, tested on a synthetic design. **If B-12 lands, the ALU
+    held-out schedules are no longer held out**: report any rerun of them as
+    post-change, beside (never replacing) the numbers above.
+  - MAC: deliberate. Lines 22 and 23 are equally far from the failure and the
+    clamp is one step closer, so the mutated line ranks 2nd on this design
+    every time.
+  - `SVA_LATENCY_ASSUMED`: decided with Track B. Keep the diagnostic; no
+    manifest latency field.
+
+- **API access token (open item 5; PR after
+  #32).** Every route but `GET /api/health` and CORS preflight needs
+  `Authorization: Bearer <token>`; the token is random per `serve` start,
+  printed with a ready `?api=...#token=...` link, optionally written to a
+  0600 `--token-file`, and compared in constant time. Host/Origin guards are
+  unchanged. The UI reads the token from the URL fragment (never sent to a
+  server), clears it from the address bar, sends it as a header, and shows a
+  "needs its access token" state on 401 instead of "offline". Tests:
+  `tests/track_c/test_api.py` (every protected route x missing/wrong/other
+  scheme/empty token; mutation-checked), `ui/src/test/api.test.tsx`, and
+  `ui/scripts/live_check.py` (refused without the token, full run with it,
+  token gone from the address bar). The live check also no longer leaves
+  `vite preview` running: it stops npm's whole process group.
 
 ## What was verified, and how
 
@@ -91,13 +125,14 @@ wins.
   no `TOP.` scope; tests now use the detected prefix). Not covered: Windows, and
   macOS with GTKWave installed.
 - Case 3 (MAC) reports Track B's `SVA_LATENCY_ASSUMED`: the generated assertion
-  assumes an output latency. Decide whether the manifest should declare it.
-- The causal step has no wall-clock limit and does not check cancellation. It
-  costs under 10 ms on the current cases; a trace near the 256 MB cap could
-  block the API's single worker. A wrong `reset.active` in a manifest gives no
-  warning.
-- The API has no authentication: any local program can use it. Host/Origin
-  guards stop web pages and other hosts only.
+  assumes an output latency. Decided Nov 19 with Track B: keep the diagnostic,
+  no manifest field.
+- Localization cannot single out a defect that is a missing change copied
+  forward by later writes (FIFO `wptr[2]`); Track B records it as a known limit.
+- (Fixed Nov 19, #32: the causal step is bounded and cancellable; a manifest
+  `reset` contradicting its golden model is refused.)
+- API access token (Nov 19): stops other local users and stray local clients,
+  not the user's own processes, which can read the terminal or the token file.
 - Fixture causal data (`FixtureCausal`) is never evidence; real runs use
   `TrackBCausal`, and `analyze --causal none` reports a failure unlocalized.
 
@@ -108,15 +143,19 @@ wins.
   the mock fixture. Matches Track C as built.
 - Dev 1: spec §8.1 handshake schedules need at least one transfer per epoch.
 - Held-out evaluation beyond the generated set: new designs or independently
-  authored schedules before making any accuracy claim; share the localization
-  drop with Track B.
+  authored schedules before making any accuracy claim. (The localization drop
+  was shared with Track B on Nov 19; see "Track B's response" above.)
+- Track B B-12 (ALU hold vs missing reset): when it lands, ALU held-out
+  results become post-change.
 
 ## Next single ticket
 
-Give Track B the held-out localization result and decide the case-3 latency
-question with them. Release notes must say: 4 designs, mutated line in the top 2
-for all four authored cases but 12 of 17 detected held-out mutants, no accuracy
-claim beyond a smoke suite.
+Draft the release notes. They must say: 4 designs; mutated line in the top 2
+for all four authored cases but 12 of 17 detected held-out mutants; FIFO's
+held-out drop is a known localization limit (a missing toggle copied forward),
+not a tuned-away bug; no accuracy claim beyond a smoke suite; held-out from
+tuning, not from authorship; and, once B-12 lands, that ALU held-out numbers
+after it are post-change.
 
 ---
 
@@ -262,7 +301,7 @@ http only). Tests: `tests/track_c/test_api.py`, `ui/src/test/api.test.tsx`, and
 including a UI cancel; runs in CI's simulators job).
 
 Default origins: only the server's own; `serve --dev` adds Vite dev/preview,
-`--allow-origin` adds others. Limits to know: no authentication (any local program can use the API; the
+`--allow-origin` adds others. Limits to know (as of Nov 16; a per-start access token was added Nov 19): no authentication (any local program can use the API; the
 guards stop web pages and other hosts); one job at a time by default; job
 records live in memory and are lost on restart (run directories on disk
 remain); the UI serves no built bundle itself (use `vite preview` or `dev`,

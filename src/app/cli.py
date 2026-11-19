@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import signal
 import sys
 import threading
@@ -111,11 +112,26 @@ def _parser() -> argparse.ArgumentParser:
                        help="also allow the Vite dev/preview origins (" + ", ".join(DEFAULT_DEV_ORIGINS) + ")")
     serve.add_argument("--timeout", type=float, default=180.0, help="wall-clock seconds per job")
     serve.add_argument("--jobs", type=int, default=1, help="jobs that may run at once")
+    serve.add_argument("--token-file", type=Path, default=None, metavar="PATH",
+                       help="also write this start's access token to PATH (created with mode 0600; "
+                            "an existing file is replaced) for scripts")
 
     open_ = sub.add_parser("open", help="validate and summarize a saved run record")
     open_.add_argument("report", type=Path)
     open_.add_argument("--json", action="store_true")
     return parser
+
+
+def _write_private(path: Path, text: str) -> None:
+    """Write ``text`` to a file only the user can read. An existing file is
+    removed first, so a looser mode or another owner is never inherited."""
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as handle:
+        handle.write(text)
 
 
 def _seconds(text: str) -> float:
@@ -188,9 +204,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         except (ValueError, OSError) as exc:
             print(f"cannot start the API: {exc}", file=sys.stderr)
             return 2
+        if args.token_file is not None:
+            try:
+                _write_private(args.token_file, server.token + "\n")
+            except OSError as exc:
+                print(f"cannot write the token file: {exc}", file=sys.stderr)
+                return 2
         logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
         print(f"WaveRoot API on {server.origin}  (cases under {args.root}; Ctrl-C to stop)", flush=True)
         print("allowed origins: " + ", ".join(sorted(server.allowed_origins())), flush=True)
+        print(f"access token (new each start): {server.token}", flush=True)
+        print(f"UI: open the page with ?api={server.origin}#token={server.token}", flush=True)
         server.serve_forever()
         return 0
 
