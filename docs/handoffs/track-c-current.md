@@ -148,6 +148,11 @@ wins.
 - Track B B-12 (#34) landed. Rerun on the same seeds afterwards: only ALU
   held_out_01 and 03 changed (rank 3 -> 2; held-out top-2 12/17 -> 14/17 post-
   change). Release notes report it as a separate post-change row.
+- Profiles 06-08 per case (#39, Track B Claude session; knew the mutations):
+  Track C's single run on Nov 19 (`main` c03a73a): correct 24/24, detected
+  12/12, agreement 12/12, errors 0; top-1 5/12, top-2 11/12, top-5 12/12.
+  Authored matrix and rows 01-05 reproduced exactly. In the release notes as
+  their own row. Never rerun or adjust them; new profiles go after 08.
 
 ## Next single ticket
 
