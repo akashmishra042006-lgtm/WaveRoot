@@ -145,8 +145,9 @@ wins.
 - Held-out evaluation beyond the generated set: new designs or independently
   authored schedules before making any accuracy claim. (The localization drop
   was shared with Track B on Nov 19; see "Track B's response" above.)
-- Track B B-12 (ALU hold vs missing reset): when it lands, ALU held-out
-  results become post-change.
+- Track B B-12 (#34) landed. Rerun on the same seeds afterwards: only ALU
+  held_out_01 and 03 changed (rank 3 -> 2; held-out top-2 12/17 -> 14/17 post-
+  change). Release notes report it as a separate post-change row.
 
 ## Next single ticket
 
@@ -155,8 +156,8 @@ Get Dev 1's review of the draft release notes, `docs/release-notes.md`
 for all four authored cases but 12 of 17 detected held-out mutants; FIFO's
 held-out drop is a known localization limit (a missing toggle copied forward),
 not a tuned-away bug; no accuracy claim beyond a smoke suite; held-out from
-tuning, not from authorship; and, once B-12 lands, that ALU held-out numbers
-after it are post-change.
+tuning, not from authorship; and that ALU held-out numbers after B-12 (14 of 17
+top-2) are post-change. Done in the draft.
 
 ---
 

@@ -63,6 +63,7 @@ Rank of the mutated line among the ranked suspects:
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Authored schedules | 12/12 | 12/12 | 6/12 | 12/12 | 12/12 |
 | Held-out schedules | 17/20 | 17/17 | 6/17 | 12/17 | 15/17 |
+| Same schedules after B-12 (post-change; ALU no longer held out) | 17/20 | 17/17 | 6/17 | 14/17 | 15/17 |
 
 - **Authored:** the mutated line ranks 1st for FIFO and AXI skid and 2nd for MAC
   and ALU. Suspects repeat across a case's schedules, so these 12 rows are about
@@ -75,8 +76,14 @@ Rank of the mutated line among the ranked suspects:
   - The 3 undetected mutants are FIFO held_out_03 and MAC held_out_01 and 02.
     On those schedules the mutant's compared outputs matched the golden model.
     Why the mutation stayed hidden has not been analyzed.
+- **After B-12 (post-change):** Track B's ticket B-12 (#34) was prompted by
+  the ALU held-out rows, so those rows are no longer held out. Rerun on the
+  same seeds after it merged, exactly two rows changed: ALU held_out_01 and
+  held_out_03 moved from rank 3 to rank 2. Detection, agreement and every other
+  rank were identical. The held-out row above stays the held-out result.
 - **The only claim we make:** the mutated line is in the top 2 for all four
-  authored cases, and for 12 of the 17 detected held-out mutants.
+  authored cases, and for 12 of the 17 detected held-out mutants (14 of 17
+  after B-12, where the 2 changed rows are no longer held out).
 
 ### Why localization drops on held-out schedules
 
@@ -89,11 +96,12 @@ and MAC held_out_03:
   the later ones. So no sound rule singles it out once more recent writes
   come between it and the failure. Track B records this as a limit and
   doesn't tune ranking for it.
-- **ALU (rank 3 on two schedules):** Track B agrees this ordering is wrong. A
+- **ALU (rank 3 on two schedules):** Track B agreed this ordering was wrong. A
   hold that only keeps an X should not outrank the missing reset assignment.
-  It's tracked as Track B ticket B-12. **If B-12 lands, the ALU held-out
-  schedules no longer count as held out.** Any later rerun of them is reported
-  as post-change, alongside these numbers, never replacing them.
+  Fixed by Track B ticket B-12 (#34), tested on a made-up design; after it both
+  rows rank 2nd. Because the fix was prompted by these schedules, the ALU
+  held-out schedules no longer count as held out, and the post-B-12 numbers are
+  reported beside the held-out ones, never replacing them.
 - **MAC (always rank 2): deliberate.** The clamp is one step closer to the
   failure than the mutated comparison.
 
@@ -149,5 +157,4 @@ reproduction, not a second observation.
 - Decide the spec §8.1 handshake rule: at least one transfer per epoch.
 - Update the top-level `README.md`. It still says the engines, CLI and UI are
   not implemented.
-- If B-12 has landed, add the post-change ALU row to the localization table.
 - Optional: the console-script entry point, as a focused `pyproject.toml` PR.
