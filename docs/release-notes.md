@@ -120,6 +120,13 @@ and MAC held_out_03:
 - **No human review.** The independent reviews so far were by models: a
   fresh-session cold review of Track C, and a separate model's audit of
   Track B. Neither is a substitute for a human review.
+- **Handshake goldens need a transfer in every reset epoch.** Spec §8.1 forbids
+  an epoch with no golden records, so a handshake-mode golden file cannot
+  describe a reset epoch in which nothing transfers (for example a mid-run
+  reset with nothing in flight); `build_goldens` refuses such schedules. Dev 1
+  confirmed this rule for schema 1 on November 19, 2026. Allowing empty epochs
+  changes the meaning of the golden format, so it waits for a new schema
+  version (spec §2).
 - **Candidate assertions can assume latency.** When the cause is more than
   one clock edge before the failure, the generated assertion assumes a fixed
   latency and says so (`SVA_LATENCY_ASSUMED`). It doesn't encode conditions in
@@ -136,7 +143,8 @@ and MAC held_out_03:
   - macOS had one run on one machine (arm64, Verilator 5.054, Icarus 13.0):
     unit and simulator tests passed, using the `poll()` runner path. Track A's
     FST test was not run there because GTKWave was not installed.
-  - Windows natively is not supported: the simulator runner uses POSIX-only
+  - Windows natively is not supported for 0.1.0 (Dev 1, November 19, 2026);
+    use WSL2. The simulator runner uses POSIX-only
     process and signal calls (`mypy src/` reports them on Windows), and
     Verilator and Icarus were run only under WSL. Under WSL2 (Ubuntu 26.04,
     Verilator 5.032, Icarus 12.0) on November 19, 2026: on `main` at 77c6f22
@@ -164,6 +172,15 @@ reproduction, not a second observation.
 
 ## Before tagging (for Dev 1)
 
-- Decide the spec §8.1 handshake rule: at least one transfer per epoch.
-- Update the top-level `README.md`. It still says the engines, CLI and UI are
-  not implemented.
+Decided on November 19, 2026: the spec §8.1 rule stays for schema 1 (see
+Limits); Windows is unsupported natively; the top-level `README.md` describes
+the current state.
+
+Still to do:
+
+- Track C runs `benchmarks.release_evidence --held-out` once now that
+  profiles 06-08 (#39) are merged, and reports rows held_out_06 onward on
+  their own, labeled as written by the Track B Claude session.
+- Human review of Track B and Track C by Dev 1. Until it is done, the "No human
+  review" limit stays as written; afterwards it says what was reviewed.
+- Dev 1 removes "(draft)", finalizes these notes and tags 0.1.0.
