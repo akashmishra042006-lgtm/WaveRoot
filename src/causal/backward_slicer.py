@@ -693,6 +693,15 @@ class _Slicer:
         if sequential and phase is SamplingPhase.BEFORE:
             self._carry(key, node, drivers)
             return
+        if self._held_from_epoch(key, drivers):
+            shown = self._shown(signal, cycle, phase)
+            self._epoch_origin(
+                node,
+                drivers,
+                f"is {shown} after the cycle 0 clock edge, which held the value it had before "
+                f"cycle 0 of epoch {self._epoch}",
+            )
+            return
         for driver in drivers:
             if driver.unsupported is not None:
                 self._stop(
@@ -1221,6 +1230,48 @@ class _Slicer:
             )
         return None
 
+    def _epoch_origin(self, node: _Node, drivers: tuple[Driver, ...], state: str) -> None:
+        """Classify a register value that is the one it had before cycle 0.
+
+        It is located at the reset branch when that branch never assigns the
+        register (and the reset is known); otherwise it is an epoch boundary.
+        """
+        path = self._trace_path(node.key[0])
+        reset_branch = self._unreset_branch(node.key[0], drivers)
+        if reset_branch is not None:
+            node.kind = _Kind.UNRESET
+            node.location = reset_branch
+            node.note = (
+                f"{path} {state}, but the reset branch of its clocked process does not assign "
+                "it, so its value is left over from before reset"
+            )
+            return
+        node.kind = _Kind.EPOCH_BOUNDARY
+        node.note = (
+            f"{path} {state}; that value was established by reset or before the epoch began"
+        )
+
+    def _held_from_epoch(self, key: _Key, drivers: tuple[Driver, ...]) -> bool:
+        """True when a register's value settled at the cycle 0 edge provably held through it.
+
+        Holds at later edges are skipped by one carry edge (``_carry``). A carry must
+        start from a settled value, so the hold at the cycle 0 edge cannot be skipped
+        the same way; instead its settled node takes the origin of the value before
+        cycle 0 (B-12). Without this, that one hold would add a storage boundary and
+        rank its unmet condition ahead of the register's real origin.
+        """
+        signal, cycle, phase = key
+        if cycle != 0 or phase is not SamplingPhase.SETTLED or self._options.expand_holds:
+            return False
+        if not all(
+            d.unsupported is None
+            and d.edge_type is EdgeType.SEQUENTIAL
+            and self._clock_matches(d)
+            for d in drivers
+        ):
+            return False
+        return self._held(signal, drivers, 0, self._demand.get(key, self._full(signal)))
+
     def _carry(self, key: _Key, node: _Node, drivers: tuple[Driver, ...]) -> None:
         """Link a register read ``before`` an edge to the earlier edge that wrote it."""
         signal, cycle, _ = key
@@ -1251,21 +1302,7 @@ class _Slicer:
                 )
                 return
         if cycle == 0:
-            reset_branch = self._unreset_branch(signal, drivers)
-            if reset_branch is not None:
-                node.kind = _Kind.UNRESET
-                node.location = reset_branch
-                node.note = (
-                    f"{path} is {shown} before cycle 0 of epoch {self._epoch}, but the reset "
-                    "branch of its clocked process does not assign it, so its value is left "
-                    "over from before reset"
-                )
-                return
-            node.kind = _Kind.EPOCH_BOUNDARY
-            node.note = (
-                f"{path} is {shown} before cycle 0 of epoch {self._epoch}; that value was "
-                "established by reset or before the epoch began"
-            )
+            self._epoch_origin(node, drivers, f"is {shown} before cycle 0 of epoch {self._epoch}")
             return
         source_cycle = cycle - 1
         if source_cycle not in self._times:
@@ -1282,7 +1319,9 @@ class _Slicer:
             # Never scan past the depth limit: the work stays bounded by it.
             floor = 0 if limit is None else self._anchor_cycle - limit
             # Holds already scanned for these bits are reused, so tracing a held value
-            # from every cycle of a long window stays linear in the window.
+            # from every cycle of a long window stays linear in the window. A hold at
+            # the cycle 0 edge is not skipped here, because a carry must start from a
+            # settled value; ``_expand`` gives that settled node its origin (B-12).
             scanned: list[int] = []
             while source_cycle > 0 and source_cycle >= floor:
                 known = self._hold_origins.get((signal, demand, source_cycle))
