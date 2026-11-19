@@ -30,6 +30,18 @@ wins.
   Cost: about 0.15 s of interpreter start-up per failing run (measured here,
   under load).
 
+- **Held-out rerun (Nov 19, same seeds, same tools).** Reproduced every
+  aggregate exactly (40/40, 17/20, 20/20 agreement, ranks 6/12/15 of 17), so
+  the run is deterministic; this is a reproduction, not a second observation.
+  Per-row pattern, for Track B: FIFO ranks line 38 first only when the failure
+  follows the faulty wrap directly (held_out_05, and both authored rows at
+  cycle 3); when later increments intervene (held_out_01/04 at cycle 6,
+  held_out_02 at cycle 9) the latest `wptr` assignment, line 40, ranks first
+  and line 38 falls to 10 or 5. ALU ranks line 22 (`if (cfg_we)`) above the
+  reset branch (line 18) when the failure is past cycle 0 (held_out_01, 03).
+  MAC always ranks line 23 (the clamp) above line 22 (the mutated compare) and
+  reports `SVA_LATENCY_ASSUMED` on every detected run, authored and held-out.
+
 ## What was verified, and how
 
 - Linux, Verilator 5.020 and Icarus 12.0: `uv run mypy src/` clean (24 files);
@@ -56,7 +68,7 @@ wins.
   (not detected: FIFO 03, MAC 01, MAC 02), errors 0/20; Track B localization
   over the 17 detected: ranked 17/17, top-1 6/17, top-2 12/17, top-5 15/17.
   Localization is weaker than on the authored set (FIFO ranks the mutated line
-  10th twice, ALU 3rd three times). Same four designs and mutations, and written
+  10th twice, ALU 3rd twice; corrected Nov 19 from "three times" against the per-row table). Same four designs and mutations, and written
   by the session that built the tools: held out from tuning, not from
   authorship. A reviewer should add profiles to `PROFILES`; run new ones once and
   report them alongside, never re-seed.
