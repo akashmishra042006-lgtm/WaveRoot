@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Final, Literal, cast
 
 from src.app.adapters import AdapterError, CausalAdapter, CausalContext, ComparisonAdapter
+from src.app.bounded import CausalCancelled, CausalTimeout, analyze_bounded
 from src.app.runner import (
     PathEscapeError,
     RunRecord,
@@ -257,7 +258,14 @@ class AnalysisService:
         causal: CausalAdapter | None = None,
         *,
         fixture_mode: bool = False,
+        causal_timeout_s: float | None = None,
     ) -> None:
+        """``causal_timeout_s`` runs the causal adapter in a child process that is
+        killed on that wall-clock limit or on cancel (``src/app/bounded.py``).
+        None runs it in-process, unbounded; a cancel is then honoured only
+        before and after the step."""
+        if causal_timeout_s is not None and causal_timeout_s <= 0:
+            raise ValueError("causal_timeout_s must be positive")
         adapters: Sequence[ComparisonAdapter | CausalAdapter] = [comparison, *([causal] if causal else [])]
         uses_fixture = any(a.kind == "synthetic_fixture" for a in adapters)
         if uses_fixture and not fixture_mode:
@@ -269,6 +277,7 @@ class AnalysisService:
         self.comparison = comparison
         self.causal = causal
         self.fixture_mode = fixture_mode
+        self.causal_timeout_s = causal_timeout_s
 
     def analyze(
         self,
@@ -320,6 +329,9 @@ class AnalysisService:
             goldens = self._goldens(manifest, stim)
         except (ValueError, ImportError, TypeError) as exc:
             return stop(AnalysisStatus.INVALID_INPUT, "GOLDEN_INVALID", f"{type(exc).__name__}: {exc}")
+        mismatch = self._reset_mismatch(manifest, goldens)
+        if mismatch is not None:
+            return stop(AnalysisStatus.INVALID_INPUT, "RESET_DECLARATION_MISMATCH", mismatch)
 
         request = SimRequest(
             simulator=manifest.simulator,
@@ -380,7 +392,21 @@ class AnalysisService:
                         reset_path=manifest.reset_path,
                         reset_active=manifest.reset_active,
                     )
-                    outcome.causal = self.causal.analyze(failure, run, sources, context)
+                    if self.causal_timeout_s is None:
+                        outcome.causal = self.causal.analyze(failure, run, sources, context)
+                    else:
+                        outcome.causal = analyze_bounded(
+                            self.causal, failure, run, sources, context,
+                            timeout_s=self.causal_timeout_s, cancel=cancel,
+                        )
+                except CausalCancelled:
+                    outcome.causal = None
+                    outcome.comparisons.clear()
+                    return stop(AnalysisStatus.ERROR, "CANCELLED", "cancelled during causal analysis")
+                except CausalTimeout as exc:
+                    outcome.diagnostics.append(Diagnostic(
+                        code="CAUSAL_TIMEOUT",
+                        message=f"{exc}; the failure is unlocalized and the verdict is unaffected"))
                 except AdapterError as exc:
                     outcome.diagnostics.append(Diagnostic(code="CAUSAL_FAILED", message=str(exc)))
                 except Exception as exc:  # noqa: BLE001 - an engine bug must not discard the verdict
@@ -388,6 +414,11 @@ class AnalysisService:
                         code="CAUSAL_FAILED",
                         message=f"causal analysis failed unexpectedly ({type(exc).__name__}: {exc}); "
                                 "the failure verdict is unaffected"))
+            if cancel is not None and cancel.is_set():
+                # Arrived while an unbounded causal step ran: no verdict is reported.
+                outcome.causal = None
+                outcome.comparisons.clear()
+                return stop(AnalysisStatus.ERROR, "CANCELLED", "cancelled during causal analysis")
         return self._finish(outcome)
 
     # -- helpers --------------------------------------------------------
@@ -409,6 +440,26 @@ class AnalysisService:
                 raise TypeError(f"golden model produced no {mode.value}-mode trace")
             out[mode] = trace
         return out
+
+    @staticmethod
+    def _reset_mismatch(manifest: CaseManifest, goldens: Mapping[ComparisonMode, GoldenTrace]) -> str | None:
+        """The manifest's reset declaration only reaches the causal engine; the
+        comparison uses the golden header's, which is checked against the trace.
+        Both are canonical paths here (before rebasing). A declared value that
+        contradicts the golden model is an error in the manifest, never guessed
+        around. An undeclared value is left to the causal adapter to refuse."""
+        for mode, golden in goldens.items():
+            header = golden.header
+            for key, declared, expected in (
+                ("reset.path", manifest.reset_path, header.reset),
+                ("reset.active", manifest.reset_active, header.reset_active),
+            ):
+                if declared is not None and declared != expected:
+                    return (
+                        f"manifest {key} is {declared!r} but the {mode.value}-mode golden model "
+                        f"declares {expected!r}; the causal engine would be given the wrong reset"
+                    )
+        return None
 
     @staticmethod
     def _combine(outcome: AnalysisOutcome) -> AnalysisStatus:

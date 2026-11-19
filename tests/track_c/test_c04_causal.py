@@ -88,6 +88,27 @@ def test_service_attaches_a_real_causal_report(case: Case, tmp_path: Path, recor
 
 
 @pytest.mark.integration
+@pytest.mark.parametrize("case", CASES, ids=lambda c: c.case_id)
+def test_bounded_causal_step_gives_the_in_process_report(case: Case, tmp_path: Path) -> None:
+    """The CLI and API run Track B in a killable child process; the report
+    must be exactly what the engine gives in-process on the same run."""
+    from src.app.bounded import analyze_bounded
+
+    _need(case)
+    service = AnalysisService(Runner(tmp_path / "a", Limits(wall_clock_s=180)), WaveformComparison(), None)
+    outcome = service.analyze(case.directory / "manifest.json", variant="mutant", schedule="directed")
+    assert outcome.status is AnalysisStatus.FAIL and outcome.run is not None and outcome.primary is not None
+    failure = outcome.primary.failure
+    assert failure is not None
+    m = load_manifest(case.directory / "manifest.json")
+    ctx = CausalContext(m.case_id, m.directory, m.top, m.dut_instance, m.reset_path, m.reset_active)
+    sources = [m.directory / p for p in m.rtl["mutant"]]
+    in_process = TrackBCausal().analyze(failure, outcome.run, sources, ctx)
+    bounded = analyze_bounded(TrackBCausal(), failure, outcome.run, sources, ctx, timeout_s=120)
+    assert bounded == in_process
+
+
+@pytest.mark.integration
 def test_a_passing_run_has_no_causal_report(tmp_path: Path) -> None:
     case = CASES[0]
     _need(case)

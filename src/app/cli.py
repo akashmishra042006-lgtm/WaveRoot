@@ -72,6 +72,11 @@ def _parser() -> argparse.ArgumentParser:
     analyze.add_argument("--causal", choices=("track-b", "none"), default="track-b",
                          help="track-b: Track B's causal engine on a failing run (default); none: report "
                               "the failure unlocalized. Ignored when --fixture-causal is given")
+    analyze.add_argument("--causal-timeout", dest="causal_timeout_s", type=_seconds, default=120.0,
+                         metavar="SECONDS",
+                         help="wall-clock limit for the causal step, which runs in a child process that "
+                              "is stopped on this limit or on Ctrl-C (default 120); a timeout leaves the "
+                              "failure verdict unchanged and unlocalized")
     analyze.add_argument("--comparison", choices=("track-a", "self-check"), default="track-a",
                          help="track-a: Track A's waveform engine (default); self-check: Track C's "
                               "benchmark checker over testbench samples")
@@ -218,6 +223,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         comparison,
         causal,
         fixture_mode=bool(args.fixture_causal),
+        causal_timeout_s=args.causal_timeout_s,
     )
     cancel = threading.Event()
 

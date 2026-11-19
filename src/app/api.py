@@ -378,7 +378,7 @@ class ApiServer:
     def _default_factory(self, comparison: str) -> _Service:
         adapter = WaveformComparison() if comparison == "track-a" else SelfCheckComparison()
         runner = Runner(self._artifacts, Limits(wall_clock_s=self.config.timeout_s))
-        return AnalysisService(runner, adapter, TrackBCausal())
+        return AnalysisService(runner, adapter, TrackBCausal(), causal_timeout_s=self.config.timeout_s)
 
 
 class _Handler(BaseHTTPRequestHandler):

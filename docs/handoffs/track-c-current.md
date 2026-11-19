@@ -6,6 +6,30 @@ engine into `analyze`, the local API and the UI. Sections below are earlier
 milestones, kept for history; where they disagree with this section, this one
 wins.
 
+## Since #31 (November 19, 2026)
+
+- **Reset declaration check (open item 4).** A manifest's `reset.path` /
+  `reset.active` reach only the causal engine; the comparison uses the golden
+  header's reset, which Track A checks against the trace. `AnalysisService`
+  now refuses a manifest whose declaration contradicts its golden model, before
+  simulating: `invalid_input` / `RESET_DECLARATION_MISMATCH`. All four
+  committed manifests agree. Tests: `tests/track_c/test_service.py`
+  (mutation-checked by dropping the `reset.active` comparison).
+- **Causal step bounded (open item 3).** `src/app/bounded.py` runs the causal
+  adapter in a fresh child interpreter (`subprocess`, not `fork` and not
+  `multiprocessing` spawn, which re-imports the caller's `__main__`) that the
+  service kills on a wall-clock limit or on cancel. A timeout keeps the `fail` verdict, unlocalized, with
+  `CAUSAL_TIMEOUT`; a cancel reports `error` / `CANCELLED` and no verdict,
+  like a cancel during comparison. The CLI takes `--causal-timeout SECONDS`
+  (default 120); the API uses its job timeout. `AnalysisService` without
+  `causal_timeout_s` still runs the adapter in-process (used by
+  `release_evidence` and the tests that pass local stub classes). Tests:
+  `tests/track_c/test_causal_bound.py` (real child processes; mutation-checked
+  by removing the kill, the verdict clearing and the stdout redirection) and an integration test that
+  Track B's report is identical in-process and bounded on all four cases.
+  Cost: about 0.15 s of interpreter start-up per failing run (measured here,
+  under load).
+
 ## What was verified, and how
 
 - Linux, Verilator 5.020 and Icarus 12.0: `uv run mypy src/` clean (24 files);
