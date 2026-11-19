@@ -20,7 +20,7 @@ from typing import Any
 import pytest
 
 from src.app.api import ApiConfig, ApiServer
-from src.app.service import AnalysisOutcome
+from src.app.service import AnalysisOutcome, AnalysisService
 from src.contracts import AnalysisStatus, Diagnostic, load_mock_fixture
 
 REPO = Path(__file__).resolve().parent.parent.parent
@@ -149,6 +149,16 @@ def test_refuses_to_bind_a_non_loopback_address(root: Path, tmp_path: Path) -> N
     for host in ("0.0.0.0", "::", "192.168.1.5", "example.com"):
         with pytest.raises(ValueError, match="loopback"):
             ApiServer(ApiConfig(root=root, artifacts=tmp_path / "a", host=host))
+
+
+def test_default_service_bounds_the_causal_step(root: Path, tmp_path: Path) -> None:
+    srv = ApiServer(ApiConfig(root=root, artifacts=tmp_path / "a", timeout_s=42.0))
+    try:
+        svc = srv._default_factory("track-a")
+        assert isinstance(svc, AnalysisService) and svc.causal_timeout_s == 42.0
+    finally:
+        srv._http.server_close()
+        srv._pool.shutdown()
 
 
 def test_server_listens_on_loopback_only(server: ApiServer) -> None:

@@ -124,7 +124,8 @@ def test_analyze_passes_track_a_options_to_the_adapter(monkeypatch: pytest.Monke
     built: list[WaveformComparison] = []
 
     class SpyService:
-        def __init__(self, runner: object, comparison: object, causal: object, *, fixture_mode: bool) -> None:
+        def __init__(self, runner: object, comparison: object, causal: object, *, fixture_mode: bool,
+                     causal_timeout_s: float | None) -> None:
             assert isinstance(comparison, WaveformComparison)
             built.append(comparison)
 
@@ -153,10 +154,13 @@ def test_self_check_refuses_track_a_only_options(option: list[str]) -> None:
 
 def test_default_fst_timeout_reaches_the_adapter(monkeypatch: pytest.MonkeyPatch) -> None:
     built: list[WaveformComparison] = []
+    causal_limits: list[float | None] = []
 
     class Spy:
-        def __init__(self, runner: object, comparison: WaveformComparison, causal: object, *, fixture_mode: bool) -> None:
+        def __init__(self, runner: object, comparison: WaveformComparison, causal: object, *, fixture_mode: bool,
+                     causal_timeout_s: float | None) -> None:
             built.append(comparison)
+            causal_limits.append(causal_timeout_s)
 
         def analyze(self, *a: object, **k: object) -> object:
             raise SystemExit(0)
@@ -165,6 +169,7 @@ def test_default_fst_timeout_reaches_the_adapter(monkeypatch: pytest.MonkeyPatch
     with pytest.raises(SystemExit):
         cli.main(["analyze", str(FIFO_MANIFEST), "--variant", "mutant", "--schedule", "directed"])
     assert built[0].fst_timeout_s == DEFAULT_FST_TIMEOUT_S
+    assert causal_limits == [120.0]  # the CLI always bounds the causal step
 
 
 def test_adapter_reports_an_unwritable_run_dir_as_adapter_error(tmp_path: Path) -> None:

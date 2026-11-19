@@ -6,6 +6,42 @@ engine into `analyze`, the local API and the UI. Sections below are earlier
 milestones, kept for history; where they disagree with this section, this one
 wins.
 
+## Since #31 (November 19, 2026)
+
+- **Reset declaration check (open item 4).** A manifest's `reset.path` /
+  `reset.active` reach only the causal engine; the comparison uses the golden
+  header's reset, which Track A checks against the trace. `AnalysisService`
+  now refuses a manifest whose declaration contradicts its golden model, before
+  simulating: `invalid_input` / `RESET_DECLARATION_MISMATCH`. All four
+  committed manifests agree. Tests: `tests/track_c/test_service.py`
+  (mutation-checked by dropping the `reset.active` comparison).
+- **Causal step bounded (open item 3).** `src/app/bounded.py` runs the causal
+  adapter in a fresh child interpreter (`subprocess`, not `fork` and not
+  `multiprocessing` spawn, which re-imports the caller's `__main__`) that the
+  service kills on a wall-clock limit or on cancel. A timeout keeps the `fail` verdict, unlocalized, with
+  `CAUSAL_TIMEOUT`; a cancel reports `error` / `CANCELLED` and no verdict,
+  like a cancel during comparison. The CLI takes `--causal-timeout SECONDS`
+  (default 120); the API uses its job timeout. `AnalysisService` without
+  `causal_timeout_s` still runs the adapter in-process (used by
+  `release_evidence` and the tests that pass local stub classes). Tests:
+  `tests/track_c/test_causal_bound.py` (real child processes; mutation-checked
+  by removing the kill, the verdict clearing and the stdout redirection) and an integration test that
+  Track B's report is identical in-process and bounded on all four cases.
+  Cost: about 0.15 s of interpreter start-up per failing run (measured here,
+  under load).
+
+- **Held-out rerun (Nov 19, same seeds, same tools).** Reproduced every
+  aggregate exactly (40/40, 17/20, 20/20 agreement, ranks 6/12/15 of 17), so
+  the run is deterministic; this is a reproduction, not a second observation.
+  Per-row pattern, for Track B: FIFO ranks line 38 first only when the failure
+  follows the faulty wrap directly (held_out_05, and both authored rows at
+  cycle 3); when later increments intervene (held_out_01/04 at cycle 6,
+  held_out_02 at cycle 9) the latest `wptr` assignment, line 40, ranks first
+  and line 38 falls to 10 or 5. ALU ranks line 22 (`if (cfg_we)`) above the
+  reset branch (line 18) when the failure is past cycle 0 (held_out_01, 03).
+  MAC always ranks line 23 (the clamp) above line 22 (the mutated compare) and
+  reports `SVA_LATENCY_ASSUMED` on every detected run, authored and held-out.
+
 ## What was verified, and how
 
 - Linux, Verilator 5.020 and Icarus 12.0: `uv run mypy src/` clean (24 files);
@@ -32,7 +68,7 @@ wins.
   (not detected: FIFO 03, MAC 01, MAC 02), errors 0/20; Track B localization
   over the 17 detected: ranked 17/17, top-1 6/17, top-2 12/17, top-5 15/17.
   Localization is weaker than on the authored set (FIFO ranks the mutated line
-  10th twice, ALU 3rd three times). Same four designs and mutations, and written
+  10th twice, ALU 3rd twice; corrected Nov 19 from "three times" against the per-row table). Same four designs and mutations, and written
   by the session that built the tools: held out from tuning, not from
   authorship. A reviewer should add profiles to `PROFILES`; run new ones once and
   report them alongside, never re-seed.

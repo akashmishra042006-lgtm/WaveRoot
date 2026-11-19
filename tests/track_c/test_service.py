@@ -173,6 +173,53 @@ def test_four_state_case_refuses_a_substitute_simulator(tmp_path: Path) -> None:
     assert runner.requests == []
 
 
+# A manifest's reset.path/reset.active reach only the causal engine; the
+# comparison uses the golden header's reset, which Track A checks against the
+# trace. A manifest that contradicts its own golden model is refused before
+# anything runs, so a wrong polarity can never silently mislead the slicer.
+
+
+def _fifo_reset(**changes: str) -> dict[str, object]:
+    reset = dict(json.loads(FIFO_MANIFEST.read_text())["reset"])
+    reset.update(changes)
+    return reset
+
+
+@pytest.mark.parametrize(
+    "reset",
+    [_fifo_reset(active="1"), _fifo_reset(path="tb.dut.wr_en")],
+    ids=["wrong_active_level", "wrong_reset_path"],
+)
+def test_reset_declaration_contradicting_the_golden_model_is_refused(
+    tmp_path: Path, reset: dict[str, object]
+) -> None:
+    manifest = write_manifest(tmp_path, reset=reset)
+    runner = StubRunner(tmp_path, RunStatus.OK)
+    outcome = service(runner).analyze(manifest, variant="mutant", schedule="directed")
+    assert outcome.status is AnalysisStatus.INVALID_INPUT
+    assert [d.code for d in outcome.diagnostics] == ["RESET_DECLARATION_MISMATCH"]
+    assert runner.requests == []  # nothing was simulated
+
+
+def test_matching_reset_declaration_passes_the_check(tmp_path: Path) -> None:
+    manifest = write_manifest(tmp_path, reset=_fifo_reset())
+    outcome = service(StubRunner(tmp_path, RunStatus.BUILD_FAILED)).analyze(
+        manifest, variant="mutant", schedule="directed"
+    )
+    assert [d.code for d in outcome.diagnostics] == ["BUILD_FAILED"]  # got as far as running
+
+
+@pytest.mark.parametrize(
+    "case", ["case_01_fifo_wrap", "case_02_axi_skid", "case_03_mac_overflow", "case_04_alu_xprop"]
+)
+def test_committed_manifests_agree_with_their_golden_models(tmp_path: Path, case: str) -> None:
+    manifest = REPO / "benchmarks" / case / "manifest.json"
+    outcome = service(StubRunner(tmp_path, RunStatus.BUILD_FAILED)).analyze(
+        manifest, variant="mutant", schedule="directed"
+    )
+    assert [d.code for d in outcome.diagnostics] == ["BUILD_FAILED"]
+
+
 # ----------------------------------------------------------------------
 # Fixture mode is explicit and honest
 # ----------------------------------------------------------------------
