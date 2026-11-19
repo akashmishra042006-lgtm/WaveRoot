@@ -151,7 +151,14 @@ written a different value to the wrong bit) and its own ticket.
 Held-out localization before B-12 (Track C, #30, run once): over 17 detected
 mutants, top-1 6, top-2 12, top-5 15. B-12 changes case 04's ordering, so case
 04's held-out rows are no longer held out for B-12; report any rerun as
-post-change.
+post-change. Track C's post-change rerun (same seeds, `docs/release-notes.md`):
+exactly two rows moved, ALU held_out_01 and 03 from rank 3 to rank 2, so top-2
+is 14 of 17; nothing else changed.
+
+Profiles 06-08 per case (#39) were written by this Track B session. That author
+knew the four mutations, had studied the per-row rankings of held_out_01-05,
+and wrote B-12, so those rows are held out from tuning only, not independent.
+No mutant was run on them before Track C's single evidence run.
 
 ### 1.3 What the slicer refuses to guess
 
@@ -219,7 +226,6 @@ These are not tickets for Track B to execute alone. Raise them with Dev 1.
 
 | Item | Why it matters | Owner |
 | --- | --- | --- |
-| Line endings and source hashes | `SourceFile.sha256` is the hash of the file's bytes. On a Windows checkout with `core.autocrlf=true`, `tests/fixtures/mock_fifo_wrap.sv` hashes to `54b129d2...`; the LF form hashes to `76726bf9...`, which is what the fixture JSON records. The benchmark RTL has the same problem, so the mutant cases of `tests/test_e2e_benchmarks.py` fail on such a checkout and pass on an LF clone. A `.gitattributes` rule (`*.sv text eol=lf`) would make hashes identical on every platform. Still open. | Dev 1 |
 | Trace names for array elements and unpacked struct fields | Tickets B-02 and B-03 need to know the path a provider gives `mem[2]` or `s.field`. The spec's path grammar allows `mem[2]`; simulators differ in what they dump. | Track A with Dev 1 |
 
 Resolved: `pyslang` is a locked runtime dependency (#14). Track C passes
@@ -228,7 +234,10 @@ Resolved: `pyslang` is a locked runtime dependency (#14). Track C passes
 #29). `SVA_LATENCY_ASSUMED` stays a diagnostic; the manifest gets no latency
 field (agreed with Track C on #30). The causal step is bounded by Track C: it
 runs in a child process killed on a wall-clock limit or cancel (#32), so
-`SliceOptions` needs no deadline.
+`SliceOptions` needs no deadline. Line endings: `.gitattributes` checks out
+every text file with LF on every platform (#35), so `SourceFile.sha256`, the
+graders, and the mock fixture match on a fresh Windows checkout too (an
+existing clone needs one re-checkout; see #35).
 
 ## 4. Tickets
 
