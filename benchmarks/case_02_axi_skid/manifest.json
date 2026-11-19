@@ -53,6 +53,26 @@
       "stim": "stim/reset_midway.stim",
       "mutant_detected": true,
       "note": "cycle mode detects the dropped entry; handshake mode alone passes because the surviving transfers still arrive in order"
+    },
+    "held_out_01": {
+      "stim": "stim/held_out_01.stim",
+      "held_out": true
+    },
+    "held_out_02": {
+      "stim": "stim/held_out_02.stim",
+      "held_out": true
+    },
+    "held_out_03": {
+      "stim": "stim/held_out_03.stim",
+      "held_out": true
+    },
+    "held_out_04": {
+      "stim": "stim/held_out_04.stim",
+      "held_out": true
+    },
+    "held_out_05": {
+      "stim": "stim/held_out_05.stim",
+      "held_out": true
     }
   },
   "analysis_inputs": {
@@ -67,7 +87,12 @@
       "stim/directed.stim",
       "stim/long_stall.stim",
       "stim/stall_release_replace.stim",
-      "stim/reset_midway.stim"
+      "stim/reset_midway.stim",
+      "stim/held_out_01.stim",
+      "stim/held_out_02.stim",
+      "stim/held_out_03.stim",
+      "stim/held_out_04.stim",
+      "stim/held_out_05.stim"
     ]
   },
   "control_inputs": {

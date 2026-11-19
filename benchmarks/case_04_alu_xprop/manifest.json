@@ -55,6 +55,26 @@
       "stim": "stim/reset_midway.stim",
       "mutant_detected": true,
       "note": "after a mid-stream reset the mutant holds a stale known selector: a value_mismatch, not an unknown_value"
+    },
+    "held_out_01": {
+      "stim": "stim/held_out_01.stim",
+      "held_out": true
+    },
+    "held_out_02": {
+      "stim": "stim/held_out_02.stim",
+      "held_out": true
+    },
+    "held_out_03": {
+      "stim": "stim/held_out_03.stim",
+      "held_out": true
+    },
+    "held_out_04": {
+      "stim": "stim/held_out_04.stim",
+      "held_out": true
+    },
+    "held_out_05": {
+      "stim": "stim/held_out_05.stim",
+      "held_out": true
     }
   },
   "analysis_inputs": {
@@ -68,7 +88,12 @@
     "stimulus": [
       "stim/directed.stim",
       "stim/partial_overlap.stim",
-      "stim/reset_midway.stim"
+      "stim/reset_midway.stim",
+      "stim/held_out_01.stim",
+      "stim/held_out_02.stim",
+      "stim/held_out_03.stim",
+      "stim/held_out_04.stim",
+      "stim/held_out_05.stim"
     ]
   },
   "control_inputs": {
