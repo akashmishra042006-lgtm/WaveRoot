@@ -76,6 +76,18 @@
     "held_out_05": {
       "stim": "stim/held_out_05.stim",
       "held_out": true
+    },
+    "held_out_06": {
+      "stim": "stim/held_out_06.stim",
+      "held_out": true
+    },
+    "held_out_07": {
+      "stim": "stim/held_out_07.stim",
+      "held_out": true
+    },
+    "held_out_08": {
+      "stim": "stim/held_out_08.stim",
+      "held_out": true
     }
   },
   "analysis_inputs": {
@@ -95,7 +107,10 @@
       "stim/held_out_02.stim",
       "stim/held_out_03.stim",
       "stim/held_out_04.stim",
-      "stim/held_out_05.stim"
+      "stim/held_out_05.stim",
+      "stim/held_out_06.stim",
+      "stim/held_out_07.stim",
+      "stim/held_out_08.stim"
     ]
   },
   "control_inputs": {
