@@ -64,6 +64,7 @@ Rank of the mutated line among the ranked suspects:
 | Authored schedules | 12/12 | 12/12 | 6/12 | 12/12 | 12/12 |
 | Held-out schedules | 17/20 | 17/17 | 6/17 | 12/17 | 15/17 |
 | Same schedules after B-12 (post-change; ALU no longer held out) | 17/20 | 17/17 | 6/17 | 14/17 | 15/17 |
+| Profiles 06-08 (#39, written by the Track B Claude session) | 12/12 | 12/12 | 5/12 | 11/12 | 12/12 |
 
 - **Authored:** the mutated line ranks 1st for FIFO and AXI skid and 2nd for MAC
   and ALU. Suspects repeat across a case's schedules, so these 12 rows are about
@@ -81,9 +82,22 @@ Rank of the mutated line among the ranked suspects:
   same seeds after it merged, exactly two rows changed: ALU held_out_01 and
   held_out_03 moved from rank 3 to rank 2. Detection, agreement and every other
   rank were identical. The held-out row above stays the held-out result.
+- **Profiles 06-08:** 12 more schedules, 3 per case, appended by the Track B
+  Claude session (#39). That author knew the four mutations, had studied the
+  rankings of held_out_01-05 and wrote B-12, so these rows are held out from
+  tuning only. No mutant was run on them before Track C's single run on
+  November 19, 2026 (`main` at c03a73a, with B-12), reported here as found:
+  - the correct design passed all 24 runs (both engines);
+  - the mutant was detected on all 12, with no errored runs;
+  - Track A and the self-check agree on status and first failure 12/12;
+  - mutated-line ranks: FIFO 1, 1, 5; AXI skid 1, 1, 1; MAC 2, 2, 2; ALU 2, 2, 2.
+
+  The same run reproduced the authored matrix and rows 01-05 of the post-B-12
+  rerun exactly.
 - **The only claim we make:** the mutated line is in the top 2 for all four
   authored cases, and for 12 of the 17 detected held-out mutants (14 of 17
-  after B-12, where the 2 changed rows are no longer held out).
+  after B-12, where the 2 changed rows are no longer held out), and for 11
+  of the 12 on profiles 06-08, whose author knew the mutations.
 
 ### Why localization drops on held-out schedules
 

@@ -116,8 +116,9 @@ def markdown(rows: list[HeldRow]) -> str:
         "", "## Held-out schedules (seeded, generated once, reported as found)", "",
         f"{n} schedules over {cases} cases, produced by `benchmarks/held_out/generate.py` from fixed seeds. "
         "No mutant verdict was chosen in advance, so detection below is observed, not checked against an "
-        "expectation. The schedules were written by the same session that built the tools: held out from tuning, "
-        "not from authorship. They reuse the same four designs and mutations.", "",
+        "expectation. Each profile's author is recorded in `PROFILES`; none was written independently of the "
+        "people and sessions that built the tools and knew the mutations, so these are held out from tuning, not "
+        "from authorship. They reuse the same four designs and mutations.", "",
         "| Check | Count | Total |", "| --- | ---: | ---: |",
         f"| correct variant passes (both engines) | {c[0]} | {c[1]} |",
         f"| mutant detected (Track A) | {d[0]} | {d[1]} |",
