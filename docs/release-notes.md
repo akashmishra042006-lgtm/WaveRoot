@@ -1,7 +1,7 @@
-# WaveRoot 0.1.0 — release notes (draft)
+# WaveRoot 0.1.0 — release notes
 
-Status: **draft by Track C, for Dev 1 to review and finalize.** Not tagged.
-Every number below comes from a command listed under "Reproducing the
+Released November 20, 2026. Drafted by Track C; reviewed and finalized by
+Dev 1. Every number below comes from a command listed under "Reproducing the
 evidence"; nothing was adjusted after it was observed.
 
 ## What it is
@@ -131,9 +131,17 @@ and MAC held_out_03:
   meet this bar either: they were written by the Track B Claude session, which
   knew the four mutations and had studied the per-row rankings of
   held_out_01-05.
-- **No human review.** The independent reviews so far were by models: a
+- **No human review.** The independent reviews were by models only: a
   fresh-session cold review of Track C, and a separate model's audit of
-  Track B. Neither is a substitute for a human review.
+  Track B. Neither is a substitute for a human review. Dev 1 decided to release
+  0.1.0 without one; a human review is still needed before any stronger claim.
+- **Handshake goldens need a transfer in every reset epoch.** Spec §8.1 forbids
+  an epoch with no golden records, so a handshake-mode golden file cannot
+  describe a reset epoch in which nothing transfers (for example a mid-run
+  reset with nothing in flight); `build_goldens` refuses such schedules. Dev 1
+  confirmed this rule for schema 1 on November 19, 2026. Allowing empty epochs
+  changes the meaning of the golden format, so it waits for a new schema
+  version (spec §2).
 - **Candidate assertions can assume latency.** When the cause is more than
   one clock edge before the failure, the generated assertion assumes a fixed
   latency and says so (`SVA_LATENCY_ASSUMED`). It doesn't encode conditions in
@@ -147,10 +155,15 @@ and MAC held_out_03:
 - **Platforms.**
   - Linux (Ubuntu 24.04, Verilator 5.020, Icarus 12.0) is verified, and CI
     runs everything on it.
-  - macOS had one run on one machine (arm64, Verilator 5.054, Icarus 13.0):
-    unit and simulator tests passed, using the `poll()` runner path. Track A's
-    FST test was not run there because GTKWave was not installed.
-  - Windows natively is not supported: the simulator runner uses POSIX-only
+  - macOS (one machine: arm64, macOS 26, Verilator 5.054, Icarus 13.0):
+    `mypy src/` clean, unit tests passed, and on November 20, 2026
+    `uv run pytest -m integration` gave 98 passed, 0 failed, including Track A's
+    FST round trip, using the `poll()` runner path. The 11 skipped tests cover
+    the Linux-only `os.waitid` path. Homebrew no longer packages GTKWave, so
+    `vcd2fst`/`fst2vcd` were built from GTKWave 3.3.116's source; on non-Linux
+    builds they accept short options only, which Track A handles.
+  - Windows natively is not supported for 0.1.0 (Dev 1, November 19, 2026);
+    use WSL2. The simulator runner uses POSIX-only
     process and signal calls (`mypy src/` reports them on Windows), and
     Verilator and Icarus were run only under WSL. Under WSL2 (Ubuntu 26.04,
     Verilator 5.032, Icarus 12.0) on November 19, 2026: on `main` at 77c6f22
@@ -176,8 +189,11 @@ The held-out run is deterministic. A second run on November 19, 2026, with the
 same seeds and tools, reproduced every number above. That makes it a
 reproduction, not a second observation.
 
-## Before tagging (for Dev 1)
+## Release decisions (Dev 1)
 
-- Decide the spec §8.1 handshake rule: at least one transfer per epoch.
-- Update the top-level `README.md`. It still says the engines, CLI and UI are
-  not implemented.
+- The spec §8.1 rule stays for schema 1 (see Limits). November 19, 2026.
+- Windows is unsupported natively; use WSL2. November 19, 2026.
+- Profiles 06-08 (#39) were run once by Track C (#42) and are reported as
+  their own row. November 20, 2026.
+- 0.1.0 is released without a human review of Tracks B and C (see Limits).
+  November 20, 2026.
