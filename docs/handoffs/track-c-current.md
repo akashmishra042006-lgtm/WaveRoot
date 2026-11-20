@@ -1,4 +1,11 @@
-# Track C — current state (November 18, 2026)
+# Track C — current state (November 20, 2026)
+
+**0.1.0 is released** (`v0.1.0`, #41). Dev 1 finalized `docs/release-notes.md`
+and recorded the release decisions there: spec §8.1 stays for schema 1,
+Windows only through WSL2, profiles 06-08 reported as their own row (#42), and
+release without a human review. macOS integration, including Track A's FST
+test, passed on Dev 1's Mac. Open items 1-8 of the November 19 list are closed
+except a human review, which the notes require before any stronger claim.
 
 Everything Track C planned is on `main`: C01–C07. Track A (#9) and Track B
 (#6, #15) are merged; Track C's causal adapter (C04 part 2, #27) wires Track B's
@@ -156,13 +163,13 @@ wins.
 
 ## Next single ticket
 
-Get Dev 1's review of the draft release notes, `docs/release-notes.md`
-(drafted Nov 19; its "Before tagging" list holds what is still open). They must say: 4 designs; mutated line in the top 2
-for all four authored cases but 12 of 17 detected held-out mutants; FIFO's
-held-out drop is a known localization limit (a missing toggle copied forward),
-not a tuned-away bug; no accuracy claim beyond a smoke suite; held-out from
-tuning, not from authorship; and that ALU held-out numbers after B-12 (14 of 17
-top-2) are post-change. Done in the draft.
+None blocking; 0.1.0 is released (Nov 20). Optional Track C follow-ups:
+`waveroot --help` shows `python -m src.app.cli` as its program name;
+`benchmarks/common/benchlib.run_simulation` could delegate to
+`src/app/runner.Runner`; a fresh-session cold review of #32 (bounded causal
+step) and #33 (API token). Any claim beyond the smoke suite needs a human
+review and independently authored held-out profiles (append after 08; never
+rerun or adjust existing rows).
 
 ---
 
