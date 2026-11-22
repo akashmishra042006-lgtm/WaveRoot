@@ -16,7 +16,7 @@ All three tracks are implemented on `main`:
   API, React UI, the four-case benchmark corpus, and release evidence.
 
 The cross-track contract is [spec.md](spec.md) and `src/contracts.py`. The
-draft 0.1.0 release notes, with results and known limits, are in
+0.1.0 release notes, with results and known limits, are in
 [docs/release-notes.md](docs/release-notes.md). The four benchmarks are a smoke
 suite, not an accuracy estimate.
 
