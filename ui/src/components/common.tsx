@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode, type RefObject } from "react";
 import type { Diagnostic, LogicValue, Status } from "../model/types";
-import { describeValue, formatValue, hasUnknown, type Radix } from "../model/values";
+import { describeValue, formatValue, hasUnknown, resolveRadix, type Radix } from "../model/values";
 
 export const STATUS_TEXT: Record<Status, string> = {
   pass: "Pass",
@@ -32,6 +32,7 @@ export function StatusBadge({ status }: { status: Status }) {
 /** Exact bits always; the radix view beside them; unknowns labeled. */
 export function Value({ value, radix, testId }: { value: LogicValue | null; radix: Radix; testId?: string }) {
   if (value === null) return <span className="value missing" data-testid={testId}>not observed</span>;
+  radix = resolveRadix(radix, value.width);
   const view = radix === "bin" ? null : formatValue(value, radix);
   const unknown = hasUnknown(value);
   return (

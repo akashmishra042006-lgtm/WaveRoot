@@ -15,7 +15,21 @@ export function locationText(doc: Loaded, span: SourceSpan | null): string | nul
   return span.line === span.end_line ? `${file.path}:${span.line}` : `${file.path}:${span.line}-${span.end_line}`;
 }
 
-export function Suspects({ doc, sel, dispatch }: { doc: Loaded; sel: Selection; dispatch: Dispatch<Action> }) {
+/** The suspect's first source line, only from text whose SHA-256 matches the
+ * report; otherwise nothing is shown rather than an unverified line. */
+function verifiedLine(doc: Loaded, span: SourceSpan | null, sources: readonly SourceText[]): string | null {
+  const file = sourceFor(doc, span);
+  if (!span || !file) return null;
+  const state = resolveSource(file, sources);
+  if (state.kind !== "verified") return null;
+  const line = state.text.text.split("\n")[span.line - 1];
+  // Alignment spaces help in a file, not in a card: collapse them for display.
+  return line === undefined ? null : line.trim().replace(/\s+/g, " ") + (span.end_line > span.line ? " …" : "");
+}
+
+export function Suspects({
+  doc, sel, dispatch, sources = [],
+}: { doc: Loaded; sel: Selection; dispatch: Dispatch<Action>; sources?: readonly SourceText[] }) {
   const suspects = [...(doc.report?.suspects ?? [])].sort((a, b) => a.rank - b.rank);
   return (
     <Panel title="Ranked suspects" id="suspects">
@@ -27,6 +41,7 @@ export function Suspects({ doc, sel, dispatch }: { doc: Loaded; sel: Selection; 
           {suspects.map((s) => {
             const node = doc.report?.nodes.find((n) => n.id === s.node_id);
             const where = locationText(doc, s.location);
+            const line = verifiedLine(doc, s.location, sources);
             return (
               <li key={s.id}>
                 <button
@@ -39,9 +54,9 @@ export function Suspects({ doc, sel, dispatch }: { doc: Loaded; sel: Selection; 
                   <span className="rank">#{s.rank}</span>
                   <span className="suspect-signal"><code>{node?.signal_path}</code></span>
                   <span className="suspect-where">{where ?? "Source unavailable"}</span>
-                  {node && <span className="suspect-obs">{formatObservation(node.observation)}</span>}
+                  {line !== null && <code className="suspect-line" data-testid={`suspect-line-${s.id}`}>{line}</code>}
                   <span className="suspect-reason">{s.reason}</span>
-                  <span className="confidence">Confidence: not supplied · rank #{s.rank}</span>
+                  {node && <span className="suspect-obs">{formatObservation(node.observation)}</span>}
                 </button>
               </li>
             );

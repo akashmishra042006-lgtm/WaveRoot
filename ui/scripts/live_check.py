@@ -100,7 +100,7 @@ def main() -> int:
 
             # Track B's real report: ranked suspects, and the source behind the
             # first one served by the API and hash-verified in the browser.
-            suspects = page.locator('[data-testid^="suspect-"]')
+            suspects = page.locator('button[data-testid^="suspect-"]')
             expect(suspects.first).to_be_visible()
             suspects.first.click()
             expect(page.get_by_test_id("source-verified")).to_be_visible(timeout=15000)

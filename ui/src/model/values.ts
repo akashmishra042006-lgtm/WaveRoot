@@ -3,9 +3,11 @@
 
 import type { FailureKind, LogicValue, Observation, Phase } from "./types";
 
-export type Radix = "bin" | "hex" | "udec" | "sdec";
+export type Radix = "auto" | "bin" | "hex" | "udec" | "sdec";
+export type FixedRadix = Exclude<Radix, "auto">;
 
 export const RADIX_LABELS: Record<Radix, string> = {
+  auto: "Auto",
   bin: "Binary",
   hex: "Hex",
   udec: "Unsigned decimal",
@@ -32,10 +34,15 @@ export function isKnown(bits: string): boolean {
   return /^[01]+$/.test(bits);
 }
 
+/** "auto" shows a single bit in binary and a bus in hex. */
+export function resolveRadix(radix: Radix, width: number): FixedRadix {
+  return radix === "auto" ? (width === 1 ? "bin" : "hex") : radix;
+}
+
 /** Formatted value, or null when the radix cannot represent unknown bits. */
 export function formatValue(value: LogicValue, radix: Radix): string | null {
   const { bits, width } = value;
-  switch (radix) {
+  switch (resolveRadix(radix, width)) {
     case "bin":
       return bits;
     case "hex":
@@ -55,6 +62,7 @@ export function formatValue(value: LogicValue, radix: Radix): string | null {
  * carry information the view cannot (unknowns, or a non-binary radix). */
 export function describeValue(value: LogicValue | null, radix: Radix): string {
   if (value === null) return "not observed";
+  radix = resolveRadix(radix, value.width);
   const view = formatValue(value, radix);
   if (radix === "bin") return value.bits;
   if (view === null) return `${value.bits} (contains unknown bits)`;
@@ -73,8 +81,8 @@ export const KIND_LABELS: Record<FailureKind, string> = {
 };
 
 export const PHASE_LABELS: Record<Phase, string> = {
-  before: "before the edge",
-  settled: "settled after the edge",
+  before: "just before the clock edge",
+  settled: "after the clock edge settles",
 };
 
 export function formatTime(t: bigint): string {
