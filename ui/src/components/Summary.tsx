@@ -51,8 +51,8 @@ export function FailureStrip({ doc, radix, dispatch }: { doc: Loaded; radix: Rad
       <dl className="failure-fields">
         <div><dt>Signal</dt><dd><code data-testid="failure-signal">{failure.signal_path}</code></dd></div>
         <div><dt>Observation</dt><dd>epoch {failure.observation.epoch}, cycle {failure.observation.cycle}</dd></div>
-        <div><dt>Phase</dt><dd>{failure.observation.phase} ({PHASE_LABELS[failure.observation.phase]})</dd></div>
-        <div><dt>Tfail · exact time</dt><dd data-testid="failure-time">{formatTime(failure.observation.time_ps)}</dd></div>
+        <div><dt>Sampled</dt><dd title={`phase: ${failure.observation.phase}`}>{PHASE_LABELS[failure.observation.phase]}</dd></div>
+        <div><dt>Time (exact)</dt><dd data-testid="failure-time">{formatTime(failure.observation.time_ps)}</dd></div>
         {failure.transaction_index !== null && (
           <div><dt>Transaction</dt><dd>#{failure.transaction_index}</dd></div>
         )}

@@ -107,7 +107,7 @@ describe("scenario 1: suspect selection synchronizes every panel", () => {
     expect(screen.getByTestId("node-wptr.c3.settled")).toHaveTextContent("tb.dut.wptr · epoch 0 cycle 3 settled");
     expect(screen.getByTestId("source-location")).toHaveTextContent("tests/fixtures/mock_fifo_wrap.sv:37-38");
     expect(screen.getByTestId("cursor-time")).toHaveTextContent("55000 ps");
-    expect(screen.getByTestId("announcer")).toHaveTextContent("Suspect 1: wptr, epoch 0, cycle 3, settled");
+    expect(screen.getByTestId("announcer")).toHaveTextContent("Suspect 1: wptr, epoch 0, cycle 3, after the clock edge settles");
 
     // The source text is shown only after its SHA-256 matched the report.
     expect(await screen.findByTestId("source-verified")).toBeInTheDocument();

@@ -93,7 +93,7 @@ export function initialSelection(doc: Loaded | null): Selection {
     sourceLocation: null,
     cursorTime: null,
     window: doc?.report?.waveform && doc.failure ? tenCycleWindow(doc.report.waveform, doc.failure.clock_path, doc.failure.observation.time_ps) : doc ? bounds(doc) : null,
-    radix: "bin",
+    radix: "auto",
     showPruned: false,
     announcement: "",
   };

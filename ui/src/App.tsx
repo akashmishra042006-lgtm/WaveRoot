@@ -143,7 +143,7 @@ export function App({ client, hosted = HOSTED_BUILD }: { client?: ApiClient; hos
     (doc.report.nodes.length > 0 || doc.report.waveform !== null);
   const panels: Record<TabId, ReactNode> = doc
     ? {
-        suspects: <Suspects doc={doc} sel={sel} dispatch={dispatch} />,
+        suspects: <Suspects doc={doc} sel={sel} dispatch={dispatch} sources={sources} />,
         graph: <Graph doc={doc} sel={sel} dispatch={dispatch} />,
         source: <SourceView doc={doc} sel={sel} sources={sources} onNotice={setNotice} />,
         waveform: <Waveform doc={doc} sel={sel} dispatch={dispatch} />,
@@ -182,7 +182,7 @@ export function App({ client, hosted = HOSTED_BUILD }: { client?: ApiClient; hos
             <input ref={sourceInput} type="file" multiple hidden onChange={onSources} data-testid="source-input" />
             <label className="select">
               <span>Radix</span>
-              <select value={sel.radix} onChange={(e) => dispatch({ type: "setRadix", radix: e.target.value as Radix })} data-testid="radix">
+              <select value={sel.radix} onChange={(e) => dispatch({ type: "setRadix", radix: e.target.value as Radix })} data-testid="radix" title="Auto: single bits in binary, buses in hex. The exact bits are always shown.">
                 {(Object.keys(RADIX_LABELS) as Radix[]).map((r) => (
                   <option key={r} value={r}>{RADIX_LABELS[r]}</option>
                 ))}
@@ -195,22 +195,31 @@ export function App({ client, hosted = HOSTED_BUILD }: { client?: ApiClient; hos
 
       <main>
         {hosted ? (
-          <section className="run-panel" aria-label="About this viewer" data-testid="hosted-note">
-            <p>
-              <strong>Read-only viewer.</strong> These are real WaveRoot reports from Verilator and Icarus runs,
-              bundled with the page; nothing is sent anywhere. Running an analysis needs the simulators on your
-              own machine: see the <a href={REPO_URL} target="_blank" rel="noreferrer">README</a> to install
-              WaveRoot and run <code>uv run waveroot serve</code>.
+          doc ? (
+            <p className="run-panel hosted-compact" data-testid="hosted-note">
+              <strong>Read-only viewer</strong> of bundled real reports. To analyze your own design, install WaveRoot
+              locally (<a href={REPO_URL} target="_blank" rel="noreferrer">README</a>).
             </p>
-            <button type="button" className="primary" data-testid="hosted-example"
-              onClick={() => openDocument(SAMPLES.find((s) => s.id === "real-fifo-fail")?.document)}>
-              Open the FIFO example
-            </button>
-          </section>
+          ) : (
+            <section className="run-panel" aria-label="About this viewer" data-testid="hosted-note">
+              <h1 className="hosted-title">WaveRoot: find where a chip simulation first goes wrong, and why</h1>
+              <p>
+                <strong>Read-only viewer.</strong> These are real WaveRoot reports from Verilator and Icarus runs,
+                bundled with the page; nothing is sent anywhere. Running an analysis needs the simulators on your
+                own machine: see the <a href={REPO_URL} target="_blank" rel="noreferrer">README</a> to install
+                WaveRoot and run <code>uv run waveroot serve</code>.
+              </p>
+              <button type="button" className="primary" data-testid="hosted-example"
+                onClick={() => openDocument(SAMPLES.find((s) => s.id === "real-fifo-fail")?.document)}>
+                Open the FIFO example
+              </button>{" "}
+              <button type="button" onClick={() => fileInput.current?.click()}>Open your own report.json…</button>
+            </section>
+          )
         ) : (
           <RunPanel client={api} onResult={onApiResult} />
         )}
-        {view.kind === "empty" && (
+        {view.kind === "empty" && !hosted && (
           <section className="empty-state" data-testid="empty-state">
             <h1>Open a saved WaveRoot report</h1>
             <p>
