@@ -204,8 +204,18 @@ describe("scenario 3: unknown values are never shown as numbers", () => {
   it("explains that this real failure is not localized", async () => {
     const user = userEvent.setup();
     render(<App />);
-    await loadSample(user, /ALU unknown value/);
+    await loadSample(user, /ALU unknown value, real run without causal analysis/);
     expect(screen.getByTestId("unlocalized")).toHaveTextContent("CAUSAL_UNAVAILABLE");
+  });
+
+  it("opens the real localized ALU failure on hash-verified bundled source", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await loadSample(user, /ALU unknown value, real Icarus run/);
+    expect(screen.queryByTestId("unlocalized")).not.toBeInTheDocument();
+    await user.click(screen.getByTestId("suspect-s1"));
+    expect(await screen.findByTestId("source-verified")).toBeInTheDocument();
+    expect(screen.getByTestId("source-location")).toHaveTextContent("alu.sv");
   });
 
   it("labels the benchmark self-check, and only the self-check", async () => {

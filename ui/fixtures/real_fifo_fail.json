@@ -11,7 +11,10 @@
     "name": "track_a_waveform",
     "kind": "analysis"
   },
-  "causal_adapter": null,
+  "causal_adapter": {
+    "name": "track_b_causal",
+    "kind": "analysis"
+  },
   "primary_mode": "cycle",
   "comparisons": {
     "cycle": {
@@ -120,19 +123,2198 @@
       "diagnostics": []
     }
   },
-  "causal": null,
-  "diagnostics": [
-    {
-      "code": "CAUSAL_UNAVAILABLE",
-      "message": "no causal-analysis adapter is configured; the failure is unlocalized"
-    }
-  ],
+  "causal": {
+    "schema_version": 1,
+    "provenance": {
+      "kind": "analysis",
+      "case_id": "case_01_fifo_wrap",
+      "note": "Backward dependency slice computed by src.causal from the RTL and the trace. Suspects are ranked candidates for investigation, not proof of a root cause."
+    },
+    "status": "fail",
+    "failure": {
+      "kind": "value_mismatch",
+      "mode": "cycle",
+      "signal_path": "TOP.tb.dut.full",
+      "clock_path": "TOP.tb.dut.clk",
+      "observation": {
+        "epoch": 0,
+        "cycle": 3,
+        "phase": "settled",
+        "time_ps": "55000"
+      },
+      "transaction_index": null,
+      "expected": {
+        "width": 1,
+        "bits": "1"
+      },
+      "actual": {
+        "width": 1,
+        "bits": "0"
+      },
+      "detail": "full: expected 1 but observed 0 at epoch 0 cycle 3 (settled, 55000 ps)"
+    },
+    "anchor_node_id": "full.e0c3.settled",
+    "nodes": [
+      {
+        "id": "full.e0c3.settled",
+        "signal_path": "TOP.tb.dut.full",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 3,
+          "phase": "settled",
+          "time_ps": "55000"
+        },
+        "value": {
+          "width": 1,
+          "bits": "0"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 23,
+          "end_line": 23
+        }
+      },
+      {
+        "id": "wptr.e0c3.settled",
+        "signal_path": "TOP.tb.dut.wptr",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 3,
+          "phase": "settled",
+          "time_ps": "55000"
+        },
+        "value": {
+          "width": 3,
+          "bits": "000"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 38,
+          "end_line": 38
+        }
+      },
+      {
+        "id": "rptr.e0c3.settled",
+        "signal_path": "TOP.tb.dut.rptr",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 3,
+          "phase": "settled",
+          "time_ps": "55000"
+        },
+        "value": {
+          "width": 3,
+          "bits": "000"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 42,
+          "end_line": 46
+        }
+      },
+      {
+        "id": "wptr.e0c3.before",
+        "signal_path": "TOP.tb.dut.wptr",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 3,
+          "phase": "before",
+          "time_ps": "55000"
+        },
+        "value": {
+          "width": 3,
+          "bits": "011"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 16,
+          "end_line": 16
+        }
+      },
+      {
+        "id": "rst_n.e0c3.before",
+        "signal_path": "TOP.tb.dut.rst_n",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 3,
+          "phase": "before",
+          "time_ps": "55000"
+        },
+        "value": {
+          "width": 1,
+          "bits": "1"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 6,
+          "end_line": 6
+        }
+      },
+      {
+        "id": "push.e0c3.before",
+        "signal_path": "TOP.tb.dut.push",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 3,
+          "phase": "before",
+          "time_ps": "55000"
+        },
+        "value": {
+          "width": 1,
+          "bits": "1"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 28,
+          "end_line": 28
+        }
+      },
+      {
+        "id": "rptr.e0c3.before",
+        "signal_path": "TOP.tb.dut.rptr",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 3,
+          "phase": "before",
+          "time_ps": "55000"
+        },
+        "value": {
+          "width": 3,
+          "bits": "000"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 17,
+          "end_line": 17
+        }
+      },
+      {
+        "id": "pop.e0c3.before",
+        "signal_path": "TOP.tb.dut.pop",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 3,
+          "phase": "before",
+          "time_ps": "55000"
+        },
+        "value": {
+          "width": 1,
+          "bits": "0"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 26,
+          "end_line": 26
+        }
+      },
+      {
+        "id": "wptr.e0c2.settled",
+        "signal_path": "TOP.tb.dut.wptr",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 2,
+          "phase": "settled",
+          "time_ps": "45000"
+        },
+        "value": {
+          "width": 3,
+          "bits": "011"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 40,
+          "end_line": 40
+        }
+      },
+      {
+        "id": "in_valid.e0c3.before",
+        "signal_path": "TOP.tb.dut.in_valid",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 3,
+          "phase": "before",
+          "time_ps": "55000"
+        },
+        "value": {
+          "width": 1,
+          "bits": "1"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 7,
+          "end_line": 7
+        }
+      },
+      {
+        "id": "in_ready.e0c3.before",
+        "signal_path": "TOP.tb.dut.in_ready",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 3,
+          "phase": "before",
+          "time_ps": "55000"
+        },
+        "value": {
+          "width": 1,
+          "bits": "1"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 27,
+          "end_line": 27
+        }
+      },
+      {
+        "id": "out_valid.e0c3.before",
+        "signal_path": "TOP.tb.dut.out_valid",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 3,
+          "phase": "before",
+          "time_ps": "55000"
+        },
+        "value": {
+          "width": 1,
+          "bits": "1"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 24,
+          "end_line": 24
+        }
+      },
+      {
+        "id": "out_ready.e0c3.before",
+        "signal_path": "TOP.tb.dut.out_ready",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 3,
+          "phase": "before",
+          "time_ps": "55000"
+        },
+        "value": {
+          "width": 1,
+          "bits": "0"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 11,
+          "end_line": 11
+        }
+      },
+      {
+        "id": "rptr.e0c0.settled",
+        "signal_path": "TOP.tb.dut.rptr",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 0,
+          "phase": "settled",
+          "time_ps": "25000"
+        },
+        "value": {
+          "width": 3,
+          "bits": "000"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 17,
+          "end_line": 17
+        }
+      },
+      {
+        "id": "wptr.e0c2.before",
+        "signal_path": "TOP.tb.dut.wptr",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 2,
+          "phase": "before",
+          "time_ps": "45000"
+        },
+        "value": {
+          "width": 3,
+          "bits": "010"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 16,
+          "end_line": 16
+        }
+      },
+      {
+        "id": "rst_n.e0c2.before",
+        "signal_path": "TOP.tb.dut.rst_n",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 2,
+          "phase": "before",
+          "time_ps": "45000"
+        },
+        "value": {
+          "width": 1,
+          "bits": "1"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 6,
+          "end_line": 6
+        }
+      },
+      {
+        "id": "push.e0c2.before",
+        "signal_path": "TOP.tb.dut.push",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 2,
+          "phase": "before",
+          "time_ps": "45000"
+        },
+        "value": {
+          "width": 1,
+          "bits": "1"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 28,
+          "end_line": 28
+        }
+      },
+      {
+        "id": "full.e0c3.before",
+        "signal_path": "TOP.tb.dut.full",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 3,
+          "phase": "before",
+          "time_ps": "55000"
+        },
+        "value": {
+          "width": 1,
+          "bits": "0"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 23,
+          "end_line": 23
+        }
+      },
+      {
+        "id": "empty.e0c3.before",
+        "signal_path": "TOP.tb.dut.empty",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 3,
+          "phase": "before",
+          "time_ps": "55000"
+        },
+        "value": {
+          "width": 1,
+          "bits": "0"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 22,
+          "end_line": 22
+        }
+      },
+      {
+        "id": "wptr.e0c1.settled",
+        "signal_path": "TOP.tb.dut.wptr",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 1,
+          "phase": "settled",
+          "time_ps": "35000"
+        },
+        "value": {
+          "width": 3,
+          "bits": "010"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 40,
+          "end_line": 40
+        }
+      },
+      {
+        "id": "in_valid.e0c2.before",
+        "signal_path": "TOP.tb.dut.in_valid",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 2,
+          "phase": "before",
+          "time_ps": "45000"
+        },
+        "value": {
+          "width": 1,
+          "bits": "1"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 7,
+          "end_line": 7
+        }
+      },
+      {
+        "id": "in_ready.e0c2.before",
+        "signal_path": "TOP.tb.dut.in_ready",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 2,
+          "phase": "before",
+          "time_ps": "45000"
+        },
+        "value": {
+          "width": 1,
+          "bits": "1"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 27,
+          "end_line": 27
+        }
+      },
+      {
+        "id": "wptr.e0c1.before",
+        "signal_path": "TOP.tb.dut.wptr",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 1,
+          "phase": "before",
+          "time_ps": "35000"
+        },
+        "value": {
+          "width": 3,
+          "bits": "001"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 16,
+          "end_line": 16
+        }
+      },
+      {
+        "id": "rst_n.e0c1.before",
+        "signal_path": "TOP.tb.dut.rst_n",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 1,
+          "phase": "before",
+          "time_ps": "35000"
+        },
+        "value": {
+          "width": 1,
+          "bits": "1"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 6,
+          "end_line": 6
+        }
+      },
+      {
+        "id": "push.e0c1.before",
+        "signal_path": "TOP.tb.dut.push",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 1,
+          "phase": "before",
+          "time_ps": "35000"
+        },
+        "value": {
+          "width": 1,
+          "bits": "1"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 28,
+          "end_line": 28
+        }
+      },
+      {
+        "id": "full.e0c2.before",
+        "signal_path": "TOP.tb.dut.full",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 2,
+          "phase": "before",
+          "time_ps": "45000"
+        },
+        "value": {
+          "width": 1,
+          "bits": "0"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 23,
+          "end_line": 23
+        }
+      },
+      {
+        "id": "pop.e0c2.before",
+        "signal_path": "TOP.tb.dut.pop",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 2,
+          "phase": "before",
+          "time_ps": "45000"
+        },
+        "value": {
+          "width": 1,
+          "bits": "0"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 26,
+          "end_line": 26
+        }
+      },
+      {
+        "id": "wptr.e0c0.settled",
+        "signal_path": "TOP.tb.dut.wptr",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 0,
+          "phase": "settled",
+          "time_ps": "25000"
+        },
+        "value": {
+          "width": 3,
+          "bits": "001"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 40,
+          "end_line": 40
+        }
+      },
+      {
+        "id": "in_valid.e0c1.before",
+        "signal_path": "TOP.tb.dut.in_valid",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 1,
+          "phase": "before",
+          "time_ps": "35000"
+        },
+        "value": {
+          "width": 1,
+          "bits": "1"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 7,
+          "end_line": 7
+        }
+      },
+      {
+        "id": "in_ready.e0c1.before",
+        "signal_path": "TOP.tb.dut.in_ready",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 1,
+          "phase": "before",
+          "time_ps": "35000"
+        },
+        "value": {
+          "width": 1,
+          "bits": "1"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 27,
+          "end_line": 27
+        }
+      },
+      {
+        "id": "rptr.e0c2.before",
+        "signal_path": "TOP.tb.dut.rptr",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 2,
+          "phase": "before",
+          "time_ps": "45000"
+        },
+        "value": {
+          "width": 3,
+          "bits": "000"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 17,
+          "end_line": 17
+        }
+      },
+      {
+        "id": "out_valid.e0c2.before",
+        "signal_path": "TOP.tb.dut.out_valid",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 2,
+          "phase": "before",
+          "time_ps": "45000"
+        },
+        "value": {
+          "width": 1,
+          "bits": "1"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 24,
+          "end_line": 24
+        }
+      },
+      {
+        "id": "out_ready.e0c2.before",
+        "signal_path": "TOP.tb.dut.out_ready",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 2,
+          "phase": "before",
+          "time_ps": "45000"
+        },
+        "value": {
+          "width": 1,
+          "bits": "0"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 11,
+          "end_line": 11
+        }
+      },
+      {
+        "id": "wptr.e0c0.before",
+        "signal_path": "TOP.tb.dut.wptr",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 0,
+          "phase": "before",
+          "time_ps": "25000"
+        },
+        "value": {
+          "width": 3,
+          "bits": "000"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 16,
+          "end_line": 16
+        }
+      },
+      {
+        "id": "rst_n.e0c0.before",
+        "signal_path": "TOP.tb.dut.rst_n",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 0,
+          "phase": "before",
+          "time_ps": "25000"
+        },
+        "value": {
+          "width": 1,
+          "bits": "1"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 6,
+          "end_line": 6
+        }
+      },
+      {
+        "id": "push.e0c0.before",
+        "signal_path": "TOP.tb.dut.push",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 0,
+          "phase": "before",
+          "time_ps": "25000"
+        },
+        "value": {
+          "width": 1,
+          "bits": "1"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 28,
+          "end_line": 28
+        }
+      },
+      {
+        "id": "full.e0c1.before",
+        "signal_path": "TOP.tb.dut.full",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 1,
+          "phase": "before",
+          "time_ps": "35000"
+        },
+        "value": {
+          "width": 1,
+          "bits": "0"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 23,
+          "end_line": 23
+        }
+      },
+      {
+        "id": "pop.e0c1.before",
+        "signal_path": "TOP.tb.dut.pop",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 1,
+          "phase": "before",
+          "time_ps": "35000"
+        },
+        "value": {
+          "width": 1,
+          "bits": "0"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 26,
+          "end_line": 26
+        }
+      },
+      {
+        "id": "empty.e0c2.before",
+        "signal_path": "TOP.tb.dut.empty",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 2,
+          "phase": "before",
+          "time_ps": "45000"
+        },
+        "value": {
+          "width": 1,
+          "bits": "0"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 22,
+          "end_line": 22
+        }
+      },
+      {
+        "id": "in_valid.e0c0.before",
+        "signal_path": "TOP.tb.dut.in_valid",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 0,
+          "phase": "before",
+          "time_ps": "25000"
+        },
+        "value": {
+          "width": 1,
+          "bits": "1"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 7,
+          "end_line": 7
+        }
+      },
+      {
+        "id": "in_ready.e0c0.before",
+        "signal_path": "TOP.tb.dut.in_ready",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 0,
+          "phase": "before",
+          "time_ps": "25000"
+        },
+        "value": {
+          "width": 1,
+          "bits": "1"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 27,
+          "end_line": 27
+        }
+      },
+      {
+        "id": "rptr.e0c1.before",
+        "signal_path": "TOP.tb.dut.rptr",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 1,
+          "phase": "before",
+          "time_ps": "35000"
+        },
+        "value": {
+          "width": 3,
+          "bits": "000"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 17,
+          "end_line": 17
+        }
+      },
+      {
+        "id": "out_valid.e0c1.before",
+        "signal_path": "TOP.tb.dut.out_valid",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 1,
+          "phase": "before",
+          "time_ps": "35000"
+        },
+        "value": {
+          "width": 1,
+          "bits": "1"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 24,
+          "end_line": 24
+        }
+      },
+      {
+        "id": "out_ready.e0c1.before",
+        "signal_path": "TOP.tb.dut.out_ready",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 1,
+          "phase": "before",
+          "time_ps": "35000"
+        },
+        "value": {
+          "width": 1,
+          "bits": "0"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 11,
+          "end_line": 11
+        }
+      },
+      {
+        "id": "full.e0c0.before",
+        "signal_path": "TOP.tb.dut.full",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 0,
+          "phase": "before",
+          "time_ps": "25000"
+        },
+        "value": {
+          "width": 1,
+          "bits": "0"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 23,
+          "end_line": 23
+        }
+      },
+      {
+        "id": "pop.e0c0.before",
+        "signal_path": "TOP.tb.dut.pop",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 0,
+          "phase": "before",
+          "time_ps": "25000"
+        },
+        "value": {
+          "width": 1,
+          "bits": "0"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 26,
+          "end_line": 26
+        }
+      },
+      {
+        "id": "empty.e0c1.before",
+        "signal_path": "TOP.tb.dut.empty",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 1,
+          "phase": "before",
+          "time_ps": "35000"
+        },
+        "value": {
+          "width": 1,
+          "bits": "0"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 22,
+          "end_line": 22
+        }
+      },
+      {
+        "id": "rptr.e0c0.before",
+        "signal_path": "TOP.tb.dut.rptr",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 0,
+          "phase": "before",
+          "time_ps": "25000"
+        },
+        "value": {
+          "width": 3,
+          "bits": "000"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 17,
+          "end_line": 17
+        }
+      },
+      {
+        "id": "out_valid.e0c0.before",
+        "signal_path": "TOP.tb.dut.out_valid",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 0,
+          "phase": "before",
+          "time_ps": "25000"
+        },
+        "value": {
+          "width": 1,
+          "bits": "0"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 24,
+          "end_line": 24
+        }
+      },
+      {
+        "id": "out_ready.e0c0.before",
+        "signal_path": "TOP.tb.dut.out_ready",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 0,
+          "phase": "before",
+          "time_ps": "25000"
+        },
+        "value": {
+          "width": 1,
+          "bits": "0"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 11,
+          "end_line": 11
+        }
+      },
+      {
+        "id": "empty.e0c0.before",
+        "signal_path": "TOP.tb.dut.empty",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 0,
+          "phase": "before",
+          "time_ps": "25000"
+        },
+        "value": {
+          "width": 1,
+          "bits": "1"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 22,
+          "end_line": 22
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0001",
+        "source": "wptr.e0c3.settled",
+        "target": "full.e0c3.settled",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`full = (wptr[1:0] == rptr[1:0]) && (wptr[2] != rptr[2])` executes after the cycle 3 clock edge settles."
+      },
+      {
+        "id": "e0002",
+        "source": "rptr.e0c3.settled",
+        "target": "full.e0c3.settled",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`full = (wptr[1:0] == rptr[1:0]) && (wptr[2] != rptr[2])` executes after the cycle 3 clock edge settles."
+      },
+      {
+        "id": "e0003",
+        "source": "wptr.e0c3.before",
+        "target": "wptr.e0c3.settled",
+        "edge_type": "sequential",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`wptr <= {wptr[2], 2'b00}` executes just before the cycle 3 clock edge."
+      },
+      {
+        "id": "e0004",
+        "source": "wptr.e0c3.before",
+        "target": "wptr.e0c3.settled",
+        "edge_type": "sequential",
+        "role": "data",
+        "branch": "pruned",
+        "reason": "`wptr <= wptr + 3'd1` does not execute: !(wptr[1:0] == 2'b11) is false just before the cycle 3 clock edge."
+      },
+      {
+        "id": "e0005",
+        "source": "rst_n.e0c3.before",
+        "target": "wptr.e0c3.settled",
+        "edge_type": "sequential",
+        "role": "control",
+        "branch": "retained",
+        "reason": "Condition `!rst_n` is 1'b0 just before the cycle 3 clock edge and decides which assignment to TOP.tb.dut.wptr executes."
+      },
+      {
+        "id": "e0006",
+        "source": "push.e0c3.before",
+        "target": "wptr.e0c3.settled",
+        "edge_type": "sequential",
+        "role": "control",
+        "branch": "retained",
+        "reason": "Condition `push` is 1'b1 just before the cycle 3 clock edge and decides which assignment to TOP.tb.dut.wptr executes."
+      },
+      {
+        "id": "e0007",
+        "source": "wptr.e0c3.before",
+        "target": "wptr.e0c3.settled",
+        "edge_type": "sequential",
+        "role": "control",
+        "branch": "retained",
+        "reason": "Condition `wptr[1:0] == 2'b11` is 1'b1 just before the cycle 3 clock edge and decides which assignment to TOP.tb.dut.wptr executes."
+      },
+      {
+        "id": "e0008",
+        "source": "rptr.e0c3.before",
+        "target": "rptr.e0c3.settled",
+        "edge_type": "sequential",
+        "role": "data",
+        "branch": "pruned",
+        "reason": "`rptr <= {~rptr[2], 2'b00}` does not execute: pop is false just before the cycle 3 clock edge. `rptr <= rptr + 3'd1` does not execute: pop is false just before the cycle 3 clock edge."
+      },
+      {
+        "id": "e0009",
+        "source": "rst_n.e0c3.before",
+        "target": "rptr.e0c3.settled",
+        "edge_type": "sequential",
+        "role": "control",
+        "branch": "retained",
+        "reason": "Condition `!rst_n` is 1'b0 just before the cycle 3 clock edge and decides which assignment to TOP.tb.dut.rptr executes."
+      },
+      {
+        "id": "e0010",
+        "source": "pop.e0c3.before",
+        "target": "rptr.e0c3.settled",
+        "edge_type": "sequential",
+        "role": "control",
+        "branch": "retained",
+        "reason": "Condition `pop` is 1'b0 just before the cycle 3 clock edge and decides which assignment to TOP.tb.dut.rptr executes."
+      },
+      {
+        "id": "e0011",
+        "source": "rptr.e0c3.before",
+        "target": "rptr.e0c3.settled",
+        "edge_type": "sequential",
+        "role": "control",
+        "branch": "pruned",
+        "reason": "Condition `rptr[1:0] == 2'b11` is not evaluated: pop is false just before the cycle 3 clock edge."
+      },
+      {
+        "id": "e0012",
+        "source": "rptr.e0c3.before",
+        "target": "rptr.e0c3.settled",
+        "edge_type": "sequential",
+        "role": "data",
+        "branch": "retained",
+        "reason": "TOP.tb.dut.rptr holds its value: no assignment to it executes at the cycle 3 clock edge."
+      },
+      {
+        "id": "e0013",
+        "source": "wptr.e0c2.settled",
+        "target": "wptr.e0c3.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "Carry: the value of TOP.tb.dut.wptr settled at the cycle 2 clock edge is unchanged before the cycle 3 clock edge."
+      },
+      {
+        "id": "e0014",
+        "source": "in_valid.e0c3.before",
+        "target": "push.e0c3.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`push = in_valid && in_ready` executes just before the cycle 3 clock edge."
+      },
+      {
+        "id": "e0015",
+        "source": "in_ready.e0c3.before",
+        "target": "push.e0c3.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`push = in_valid && in_ready` executes just before the cycle 3 clock edge."
+      },
+      {
+        "id": "e0016",
+        "source": "out_valid.e0c3.before",
+        "target": "pop.e0c3.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`pop = out_valid && out_ready` executes just before the cycle 3 clock edge."
+      },
+      {
+        "id": "e0017",
+        "source": "out_ready.e0c3.before",
+        "target": "pop.e0c3.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`pop = out_valid && out_ready` executes just before the cycle 3 clock edge."
+      },
+      {
+        "id": "e0018",
+        "source": "rptr.e0c0.settled",
+        "target": "rptr.e0c3.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "Carry: the value of TOP.tb.dut.rptr settled at the cycle 0 clock edge is unchanged before the cycle 3 clock edge."
+      },
+      {
+        "id": "e0019",
+        "source": "wptr.e0c2.before",
+        "target": "wptr.e0c2.settled",
+        "edge_type": "sequential",
+        "role": "data",
+        "branch": "pruned",
+        "reason": "`wptr <= {wptr[2], 2'b00}` does not execute: wptr[1:0] == 2'b11 is false just before the cycle 2 clock edge."
+      },
+      {
+        "id": "e0020",
+        "source": "wptr.e0c2.before",
+        "target": "wptr.e0c2.settled",
+        "edge_type": "sequential",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`wptr <= wptr + 3'd1` executes just before the cycle 2 clock edge."
+      },
+      {
+        "id": "e0021",
+        "source": "rst_n.e0c2.before",
+        "target": "wptr.e0c2.settled",
+        "edge_type": "sequential",
+        "role": "control",
+        "branch": "retained",
+        "reason": "Condition `!rst_n` is 1'b0 just before the cycle 2 clock edge and decides which assignment to TOP.tb.dut.wptr executes."
+      },
+      {
+        "id": "e0022",
+        "source": "push.e0c2.before",
+        "target": "wptr.e0c2.settled",
+        "edge_type": "sequential",
+        "role": "control",
+        "branch": "retained",
+        "reason": "Condition `push` is 1'b1 just before the cycle 2 clock edge and decides which assignment to TOP.tb.dut.wptr executes."
+      },
+      {
+        "id": "e0023",
+        "source": "wptr.e0c2.before",
+        "target": "wptr.e0c2.settled",
+        "edge_type": "sequential",
+        "role": "control",
+        "branch": "retained",
+        "reason": "Condition `wptr[1:0] == 2'b11` is 1'b0 just before the cycle 2 clock edge and decides which assignment to TOP.tb.dut.wptr executes."
+      },
+      {
+        "id": "e0024",
+        "source": "full.e0c3.before",
+        "target": "in_ready.e0c3.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`in_ready = !full || pop` executes just before the cycle 3 clock edge."
+      },
+      {
+        "id": "e0025",
+        "source": "pop.e0c3.before",
+        "target": "in_ready.e0c3.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`in_ready = !full || pop` executes just before the cycle 3 clock edge."
+      },
+      {
+        "id": "e0026",
+        "source": "empty.e0c3.before",
+        "target": "out_valid.e0c3.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`out_valid = !empty` executes just before the cycle 3 clock edge."
+      },
+      {
+        "id": "e0027",
+        "source": "wptr.e0c1.settled",
+        "target": "wptr.e0c2.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "Carry: the value of TOP.tb.dut.wptr settled at the cycle 1 clock edge is unchanged before the cycle 2 clock edge."
+      },
+      {
+        "id": "e0028",
+        "source": "in_valid.e0c2.before",
+        "target": "push.e0c2.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`push = in_valid && in_ready` executes just before the cycle 2 clock edge."
+      },
+      {
+        "id": "e0029",
+        "source": "in_ready.e0c2.before",
+        "target": "push.e0c2.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`push = in_valid && in_ready` executes just before the cycle 2 clock edge."
+      },
+      {
+        "id": "e0030",
+        "source": "wptr.e0c3.before",
+        "target": "full.e0c3.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`full = (wptr[1:0] == rptr[1:0]) && (wptr[2] != rptr[2])` executes just before the cycle 3 clock edge."
+      },
+      {
+        "id": "e0031",
+        "source": "rptr.e0c3.before",
+        "target": "full.e0c3.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`full = (wptr[1:0] == rptr[1:0]) && (wptr[2] != rptr[2])` executes just before the cycle 3 clock edge."
+      },
+      {
+        "id": "e0032",
+        "source": "wptr.e0c3.before",
+        "target": "empty.e0c3.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`empty = (wptr == rptr)` executes just before the cycle 3 clock edge."
+      },
+      {
+        "id": "e0033",
+        "source": "rptr.e0c3.before",
+        "target": "empty.e0c3.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`empty = (wptr == rptr)` executes just before the cycle 3 clock edge."
+      },
+      {
+        "id": "e0034",
+        "source": "wptr.e0c1.before",
+        "target": "wptr.e0c1.settled",
+        "edge_type": "sequential",
+        "role": "data",
+        "branch": "pruned",
+        "reason": "`wptr <= {wptr[2], 2'b00}` does not execute: wptr[1:0] == 2'b11 is false just before the cycle 1 clock edge."
+      },
+      {
+        "id": "e0035",
+        "source": "wptr.e0c1.before",
+        "target": "wptr.e0c1.settled",
+        "edge_type": "sequential",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`wptr <= wptr + 3'd1` executes just before the cycle 1 clock edge."
+      },
+      {
+        "id": "e0036",
+        "source": "rst_n.e0c1.before",
+        "target": "wptr.e0c1.settled",
+        "edge_type": "sequential",
+        "role": "control",
+        "branch": "retained",
+        "reason": "Condition `!rst_n` is 1'b0 just before the cycle 1 clock edge and decides which assignment to TOP.tb.dut.wptr executes."
+      },
+      {
+        "id": "e0037",
+        "source": "push.e0c1.before",
+        "target": "wptr.e0c1.settled",
+        "edge_type": "sequential",
+        "role": "control",
+        "branch": "retained",
+        "reason": "Condition `push` is 1'b1 just before the cycle 1 clock edge and decides which assignment to TOP.tb.dut.wptr executes."
+      },
+      {
+        "id": "e0038",
+        "source": "wptr.e0c1.before",
+        "target": "wptr.e0c1.settled",
+        "edge_type": "sequential",
+        "role": "control",
+        "branch": "retained",
+        "reason": "Condition `wptr[1:0] == 2'b11` is 1'b0 just before the cycle 1 clock edge and decides which assignment to TOP.tb.dut.wptr executes."
+      },
+      {
+        "id": "e0039",
+        "source": "full.e0c2.before",
+        "target": "in_ready.e0c2.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`in_ready = !full || pop` executes just before the cycle 2 clock edge."
+      },
+      {
+        "id": "e0040",
+        "source": "pop.e0c2.before",
+        "target": "in_ready.e0c2.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`in_ready = !full || pop` executes just before the cycle 2 clock edge."
+      },
+      {
+        "id": "e0041",
+        "source": "wptr.e0c0.settled",
+        "target": "wptr.e0c1.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "Carry: the value of TOP.tb.dut.wptr settled at the cycle 0 clock edge is unchanged before the cycle 1 clock edge."
+      },
+      {
+        "id": "e0042",
+        "source": "in_valid.e0c1.before",
+        "target": "push.e0c1.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`push = in_valid && in_ready` executes just before the cycle 1 clock edge."
+      },
+      {
+        "id": "e0043",
+        "source": "in_ready.e0c1.before",
+        "target": "push.e0c1.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`push = in_valid && in_ready` executes just before the cycle 1 clock edge."
+      },
+      {
+        "id": "e0044",
+        "source": "wptr.e0c2.before",
+        "target": "full.e0c2.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`full = (wptr[1:0] == rptr[1:0]) && (wptr[2] != rptr[2])` executes just before the cycle 2 clock edge."
+      },
+      {
+        "id": "e0045",
+        "source": "rptr.e0c2.before",
+        "target": "full.e0c2.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`full = (wptr[1:0] == rptr[1:0]) && (wptr[2] != rptr[2])` executes just before the cycle 2 clock edge."
+      },
+      {
+        "id": "e0046",
+        "source": "out_valid.e0c2.before",
+        "target": "pop.e0c2.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`pop = out_valid && out_ready` executes just before the cycle 2 clock edge."
+      },
+      {
+        "id": "e0047",
+        "source": "out_ready.e0c2.before",
+        "target": "pop.e0c2.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`pop = out_valid && out_ready` executes just before the cycle 2 clock edge."
+      },
+      {
+        "id": "e0048",
+        "source": "wptr.e0c0.before",
+        "target": "wptr.e0c0.settled",
+        "edge_type": "sequential",
+        "role": "data",
+        "branch": "pruned",
+        "reason": "`wptr <= {wptr[2], 2'b00}` does not execute: wptr[1:0] == 2'b11 is false just before the cycle 0 clock edge."
+      },
+      {
+        "id": "e0049",
+        "source": "wptr.e0c0.before",
+        "target": "wptr.e0c0.settled",
+        "edge_type": "sequential",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`wptr <= wptr + 3'd1` executes just before the cycle 0 clock edge."
+      },
+      {
+        "id": "e0050",
+        "source": "rst_n.e0c0.before",
+        "target": "wptr.e0c0.settled",
+        "edge_type": "sequential",
+        "role": "control",
+        "branch": "retained",
+        "reason": "Condition `!rst_n` is 1'b0 just before the cycle 0 clock edge and decides which assignment to TOP.tb.dut.wptr executes."
+      },
+      {
+        "id": "e0051",
+        "source": "push.e0c0.before",
+        "target": "wptr.e0c0.settled",
+        "edge_type": "sequential",
+        "role": "control",
+        "branch": "retained",
+        "reason": "Condition `push` is 1'b1 just before the cycle 0 clock edge and decides which assignment to TOP.tb.dut.wptr executes."
+      },
+      {
+        "id": "e0052",
+        "source": "wptr.e0c0.before",
+        "target": "wptr.e0c0.settled",
+        "edge_type": "sequential",
+        "role": "control",
+        "branch": "retained",
+        "reason": "Condition `wptr[1:0] == 2'b11` is 1'b0 just before the cycle 0 clock edge and decides which assignment to TOP.tb.dut.wptr executes."
+      },
+      {
+        "id": "e0053",
+        "source": "full.e0c1.before",
+        "target": "in_ready.e0c1.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`in_ready = !full || pop` executes just before the cycle 1 clock edge."
+      },
+      {
+        "id": "e0054",
+        "source": "pop.e0c1.before",
+        "target": "in_ready.e0c1.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`in_ready = !full || pop` executes just before the cycle 1 clock edge."
+      },
+      {
+        "id": "e0055",
+        "source": "rptr.e0c0.settled",
+        "target": "rptr.e0c2.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "Carry: the value of TOP.tb.dut.rptr settled at the cycle 0 clock edge is unchanged before the cycle 2 clock edge."
+      },
+      {
+        "id": "e0056",
+        "source": "empty.e0c2.before",
+        "target": "out_valid.e0c2.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`out_valid = !empty` executes just before the cycle 2 clock edge."
+      },
+      {
+        "id": "e0057",
+        "source": "in_valid.e0c0.before",
+        "target": "push.e0c0.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`push = in_valid && in_ready` executes just before the cycle 0 clock edge."
+      },
+      {
+        "id": "e0058",
+        "source": "in_ready.e0c0.before",
+        "target": "push.e0c0.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`push = in_valid && in_ready` executes just before the cycle 0 clock edge."
+      },
+      {
+        "id": "e0059",
+        "source": "wptr.e0c1.before",
+        "target": "full.e0c1.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`full = (wptr[1:0] == rptr[1:0]) && (wptr[2] != rptr[2])` executes just before the cycle 1 clock edge."
+      },
+      {
+        "id": "e0060",
+        "source": "rptr.e0c1.before",
+        "target": "full.e0c1.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`full = (wptr[1:0] == rptr[1:0]) && (wptr[2] != rptr[2])` executes just before the cycle 1 clock edge."
+      },
+      {
+        "id": "e0061",
+        "source": "out_valid.e0c1.before",
+        "target": "pop.e0c1.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`pop = out_valid && out_ready` executes just before the cycle 1 clock edge."
+      },
+      {
+        "id": "e0062",
+        "source": "out_ready.e0c1.before",
+        "target": "pop.e0c1.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`pop = out_valid && out_ready` executes just before the cycle 1 clock edge."
+      },
+      {
+        "id": "e0063",
+        "source": "wptr.e0c2.before",
+        "target": "empty.e0c2.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`empty = (wptr == rptr)` executes just before the cycle 2 clock edge."
+      },
+      {
+        "id": "e0064",
+        "source": "rptr.e0c2.before",
+        "target": "empty.e0c2.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`empty = (wptr == rptr)` executes just before the cycle 2 clock edge."
+      },
+      {
+        "id": "e0065",
+        "source": "full.e0c0.before",
+        "target": "in_ready.e0c0.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`in_ready = !full || pop` executes just before the cycle 0 clock edge."
+      },
+      {
+        "id": "e0066",
+        "source": "pop.e0c0.before",
+        "target": "in_ready.e0c0.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`in_ready = !full || pop` executes just before the cycle 0 clock edge."
+      },
+      {
+        "id": "e0067",
+        "source": "rptr.e0c0.settled",
+        "target": "rptr.e0c1.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "Carry: the value of TOP.tb.dut.rptr settled at the cycle 0 clock edge is unchanged before the cycle 1 clock edge."
+      },
+      {
+        "id": "e0068",
+        "source": "empty.e0c1.before",
+        "target": "out_valid.e0c1.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`out_valid = !empty` executes just before the cycle 1 clock edge."
+      },
+      {
+        "id": "e0069",
+        "source": "wptr.e0c0.before",
+        "target": "full.e0c0.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`full = (wptr[1:0] == rptr[1:0]) && (wptr[2] != rptr[2])` executes just before the cycle 0 clock edge."
+      },
+      {
+        "id": "e0070",
+        "source": "rptr.e0c0.before",
+        "target": "full.e0c0.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`full = (wptr[1:0] == rptr[1:0]) && (wptr[2] != rptr[2])` executes just before the cycle 0 clock edge."
+      },
+      {
+        "id": "e0071",
+        "source": "out_valid.e0c0.before",
+        "target": "pop.e0c0.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`pop = out_valid && out_ready` executes just before the cycle 0 clock edge."
+      },
+      {
+        "id": "e0072",
+        "source": "out_ready.e0c0.before",
+        "target": "pop.e0c0.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`pop = out_valid && out_ready` executes just before the cycle 0 clock edge."
+      },
+      {
+        "id": "e0073",
+        "source": "wptr.e0c1.before",
+        "target": "empty.e0c1.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`empty = (wptr == rptr)` executes just before the cycle 1 clock edge."
+      },
+      {
+        "id": "e0074",
+        "source": "rptr.e0c1.before",
+        "target": "empty.e0c1.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`empty = (wptr == rptr)` executes just before the cycle 1 clock edge."
+      },
+      {
+        "id": "e0075",
+        "source": "empty.e0c0.before",
+        "target": "out_valid.e0c0.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`out_valid = !empty` executes just before the cycle 0 clock edge."
+      },
+      {
+        "id": "e0076",
+        "source": "wptr.e0c0.before",
+        "target": "empty.e0c0.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`empty = (wptr == rptr)` executes just before the cycle 0 clock edge."
+      },
+      {
+        "id": "e0077",
+        "source": "rptr.e0c0.before",
+        "target": "empty.e0c0.before",
+        "edge_type": "combinational",
+        "role": "data",
+        "branch": "retained",
+        "reason": "`empty = (wptr == rptr)` executes just before the cycle 0 clock edge."
+      }
+    ],
+    "suspects": [
+      {
+        "id": "s1",
+        "rank": 1,
+        "node_id": "wptr.e0c3.settled",
+        "location": {
+          "source_id": "src0",
+          "line": 38,
+          "end_line": 38
+        },
+        "reason": "`wptr <= {wptr[2], 2'b00}` executed at the cycle 3 clock edge (55000 ps) and changed TOP.tb.dut.wptr from 3'b011 to 3'b000. It is 1 dependency hop and 0 storage boundaries from the failing observation.",
+        "evidence_node_ids": [
+          "wptr.e0c3.settled",
+          "full.e0c3.settled"
+        ]
+      },
+      {
+        "id": "s2",
+        "rank": 2,
+        "node_id": "full.e0c3.settled",
+        "location": {
+          "source_id": "src0",
+          "line": 23,
+          "end_line": 23
+        },
+        "reason": "`full = (wptr[1:0] == rptr[1:0]) && (wptr[2] != rptr[2])` drives TOP.tb.dut.full to 1'b0 after the cycle 3 clock edge settles. This is the failing observation itself.",
+        "evidence_node_ids": [
+          "full.e0c3.settled"
+        ]
+      },
+      {
+        "id": "s3",
+        "rank": 3,
+        "node_id": "rptr.e0c3.settled",
+        "location": {
+          "source_id": "src0",
+          "line": 42,
+          "end_line": 46
+        },
+        "reason": "TOP.tb.dut.rptr held 3'b000 at the cycle 3 clock edge (55000 ps): no assignment to it executed. It is 1 dependency hop and 0 storage boundaries from the failing observation.",
+        "evidence_node_ids": [
+          "rptr.e0c3.settled",
+          "full.e0c3.settled"
+        ]
+      },
+      {
+        "id": "s4",
+        "rank": 4,
+        "node_id": "wptr.e0c2.settled",
+        "location": {
+          "source_id": "src0",
+          "line": 40,
+          "end_line": 40
+        },
+        "reason": "`wptr <= wptr + 3'd1` executed at the cycle 2 clock edge (45000 ps) and changed TOP.tb.dut.wptr from 3'b010 to 3'b011. It is 3 dependency hops and 1 storage boundary from the failing observation.",
+        "evidence_node_ids": [
+          "wptr.e0c2.settled",
+          "wptr.e0c3.before",
+          "wptr.e0c3.settled",
+          "full.e0c3.settled"
+        ]
+      },
+      {
+        "id": "s5",
+        "rank": 5,
+        "node_id": "pop.e0c3.before",
+        "location": {
+          "source_id": "src0",
+          "line": 26,
+          "end_line": 26
+        },
+        "reason": "`pop = out_valid && out_ready` drives TOP.tb.dut.pop to 1'b0 just before the cycle 3 clock edge. It is 2 dependency hops and 1 storage boundary from the failing observation.",
+        "evidence_node_ids": [
+          "pop.e0c3.before",
+          "rptr.e0c3.settled",
+          "full.e0c3.settled"
+        ]
+      },
+      {
+        "id": "s6",
+        "rank": 6,
+        "node_id": "push.e0c3.before",
+        "location": {
+          "source_id": "src0",
+          "line": 28,
+          "end_line": 28
+        },
+        "reason": "`push = in_valid && in_ready` drives TOP.tb.dut.push to 1'b1 just before the cycle 3 clock edge. It is 2 dependency hops and 1 storage boundary from the failing observation.",
+        "evidence_node_ids": [
+          "push.e0c3.before",
+          "wptr.e0c3.settled",
+          "full.e0c3.settled"
+        ]
+      },
+      {
+        "id": "s7",
+        "rank": 7,
+        "node_id": "in_ready.e0c3.before",
+        "location": {
+          "source_id": "src0",
+          "line": 27,
+          "end_line": 27
+        },
+        "reason": "`in_ready = !full || pop` drives TOP.tb.dut.in_ready to 1'b1 just before the cycle 3 clock edge. It is 3 dependency hops and 1 storage boundary from the failing observation.",
+        "evidence_node_ids": [
+          "in_ready.e0c3.before",
+          "push.e0c3.before",
+          "wptr.e0c3.settled",
+          "full.e0c3.settled"
+        ]
+      },
+      {
+        "id": "s8",
+        "rank": 8,
+        "node_id": "out_valid.e0c3.before",
+        "location": {
+          "source_id": "src0",
+          "line": 24,
+          "end_line": 24
+        },
+        "reason": "`out_valid = !empty` drives TOP.tb.dut.out_valid to 1'b1 just before the cycle 3 clock edge. It is 3 dependency hops and 1 storage boundary from the failing observation.",
+        "evidence_node_ids": [
+          "out_valid.e0c3.before",
+          "pop.e0c3.before",
+          "rptr.e0c3.settled",
+          "full.e0c3.settled"
+        ]
+      },
+      {
+        "id": "s9",
+        "rank": 9,
+        "node_id": "empty.e0c3.before",
+        "location": {
+          "source_id": "src0",
+          "line": 22,
+          "end_line": 22
+        },
+        "reason": "`empty = (wptr == rptr)` drives TOP.tb.dut.empty to 1'b0 just before the cycle 3 clock edge. It is 4 dependency hops and 1 storage boundary from the failing observation.",
+        "evidence_node_ids": [
+          "empty.e0c3.before",
+          "out_valid.e0c3.before",
+          "pop.e0c3.before",
+          "rptr.e0c3.settled",
+          "full.e0c3.settled"
+        ]
+      },
+      {
+        "id": "s10",
+        "rank": 10,
+        "node_id": "rptr.e0c0.settled",
+        "location": {
+          "source_id": "src0",
+          "line": 17,
+          "end_line": 17
+        },
+        "reason": "TOP.tb.dut.rptr is 3'b000 after the cycle 0 clock edge, which held the value it had before cycle 0 of epoch 0; that value was established by reset or before the epoch began. It is 3 dependency hops and 1 storage boundary from the failing observation.",
+        "evidence_node_ids": [
+          "rptr.e0c0.settled",
+          "rptr.e0c3.before",
+          "rptr.e0c3.settled",
+          "full.e0c3.settled"
+        ]
+      }
+    ],
+    "sources": [
+      {
+        "id": "src0",
+        "path": "rtl/mutant/fifo.sv",
+        "sha256": "27e38a8aa0b7373b819089f8ac1f29995ce45a773ff54f19c0e9e5492a19e14b"
+      }
+    ],
+    "assertions": [
+      {
+        "id": "a1",
+        "text": "// WaveRoot candidate assertion a1. Not validated: it restates one\n// trace observation and the golden expected value. Review before relying on it.\n// Failure: TOP.tb.dut.full expected 1'b1, observed 1'b0 at 55000 ps\n//   (epoch 0, cycle 3, settled).\n// Top suspect: TOP.tb.dut.wptr (rtl/mutant/fifo.sv:38).\n// Cause terms (operands the suspect consumed): wptr, push.\n// Context terms (remaining pre-edge state of the sink): pop, rptr.\nmodule waveroot_chk_a1 (\n  input logic clk,\n  input logic rst_n,\n  input logic [2:0] wptr,\n  input logic push,\n  input logic pop,\n  input logic [2:0] rptr,\n  input logic full\n);\n  property p_waveroot_a1;\n    @(posedge clk) disable iff (rst_n !== 1'b1)\n    ((wptr === 3'b011) && (push === 1'b1) && (pop === 1'b0) && (rptr === 3'b000))\n    |=> (!$isunknown(full) && (full == 1'b1));\n  endproperty\n  a_waveroot_a1: assert property (p_waveroot_a1);\n  c_waveroot_a1: cover property (@(posedge clk) disable iff (rst_n !== 1'b1) ((wptr === 3'b011) && (push === 1'b1) && (pop === 1'b0) && (rptr === 3'b000)));\nendmodule\nbind fifo waveroot_chk_a1 u_waveroot_chk_a1 (.clk(clk), .rst_n(rst_n), .wptr(wptr), .push(push), .pop(pop), .rptr(rptr), .full(full));\n",
+        "validation": "candidate",
+        "tool": null
+      }
+    ],
+    "waveform": {
+      "start_ps": "15000",
+      "end_ps": "55001",
+      "signals": [
+        {
+          "signal_path": "TOP.tb.dut.clk",
+          "width": 1,
+          "initial": {
+            "width": 1,
+            "bits": "1"
+          },
+          "samples": [
+            {
+              "time_ps": "20000",
+              "value": {
+                "width": 1,
+                "bits": "0"
+              }
+            },
+            {
+              "time_ps": "25000",
+              "value": {
+                "width": 1,
+                "bits": "1"
+              }
+            },
+            {
+              "time_ps": "30000",
+              "value": {
+                "width": 1,
+                "bits": "0"
+              }
+            },
+            {
+              "time_ps": "35000",
+              "value": {
+                "width": 1,
+                "bits": "1"
+              }
+            },
+            {
+              "time_ps": "40000",
+              "value": {
+                "width": 1,
+                "bits": "0"
+              }
+            },
+            {
+              "time_ps": "45000",
+              "value": {
+                "width": 1,
+                "bits": "1"
+              }
+            },
+            {
+              "time_ps": "50000",
+              "value": {
+                "width": 1,
+                "bits": "0"
+              }
+            },
+            {
+              "time_ps": "55000",
+              "value": {
+                "width": 1,
+                "bits": "1"
+              }
+            }
+          ]
+        },
+        {
+          "signal_path": "TOP.tb.dut.full",
+          "width": 1,
+          "initial": {
+            "width": 1,
+            "bits": "0"
+          },
+          "samples": []
+        },
+        {
+          "signal_path": "TOP.tb.dut.wptr",
+          "width": 3,
+          "initial": {
+            "width": 3,
+            "bits": "000"
+          },
+          "samples": [
+            {
+              "time_ps": "25000",
+              "value": {
+                "width": 3,
+                "bits": "001"
+              }
+            },
+            {
+              "time_ps": "35000",
+              "value": {
+                "width": 3,
+                "bits": "010"
+              }
+            },
+            {
+              "time_ps": "45000",
+              "value": {
+                "width": 3,
+                "bits": "011"
+              }
+            },
+            {
+              "time_ps": "55000",
+              "value": {
+                "width": 3,
+                "bits": "000"
+              }
+            }
+          ]
+        },
+        {
+          "signal_path": "TOP.tb.dut.rptr",
+          "width": 3,
+          "initial": {
+            "width": 3,
+            "bits": "000"
+          },
+          "samples": []
+        },
+        {
+          "signal_path": "TOP.tb.dut.rst_n",
+          "width": 1,
+          "initial": {
+            "width": 1,
+            "bits": "0"
+          },
+          "samples": [
+            {
+              "time_ps": "20000",
+              "value": {
+                "width": 1,
+                "bits": "1"
+              }
+            }
+          ]
+        },
+        {
+          "signal_path": "TOP.tb.dut.push",
+          "width": 1,
+          "initial": {
+            "width": 1,
+            "bits": "0"
+          },
+          "samples": [
+            {
+              "time_ps": "20000",
+              "value": {
+                "width": 1,
+                "bits": "1"
+              }
+            }
+          ]
+        },
+        {
+          "signal_path": "TOP.tb.dut.pop",
+          "width": 1,
+          "initial": {
+            "width": 1,
+            "bits": "0"
+          },
+          "samples": []
+        },
+        {
+          "signal_path": "TOP.tb.dut.in_valid",
+          "width": 1,
+          "initial": {
+            "width": 1,
+            "bits": "0"
+          },
+          "samples": [
+            {
+              "time_ps": "20000",
+              "value": {
+                "width": 1,
+                "bits": "1"
+              }
+            }
+          ]
+        },
+        {
+          "signal_path": "TOP.tb.dut.in_ready",
+          "width": 1,
+          "initial": {
+            "width": 1,
+            "bits": "1"
+          },
+          "samples": []
+        },
+        {
+          "signal_path": "TOP.tb.dut.out_valid",
+          "width": 1,
+          "initial": {
+            "width": 1,
+            "bits": "0"
+          },
+          "samples": [
+            {
+              "time_ps": "25000",
+              "value": {
+                "width": 1,
+                "bits": "1"
+              }
+            },
+            {
+              "time_ps": "55000",
+              "value": {
+                "width": 1,
+                "bits": "0"
+              }
+            }
+          ]
+        },
+        {
+          "signal_path": "TOP.tb.dut.out_ready",
+          "width": 1,
+          "initial": {
+            "width": 1,
+            "bits": "0"
+          },
+          "samples": []
+        },
+        {
+          "signal_path": "TOP.tb.dut.empty",
+          "width": 1,
+          "initial": {
+            "width": 1,
+            "bits": "1"
+          },
+          "samples": [
+            {
+              "time_ps": "25000",
+              "value": {
+                "width": 1,
+                "bits": "0"
+              }
+            },
+            {
+              "time_ps": "55000",
+              "value": {
+                "width": 1,
+                "bits": "1"
+              }
+            }
+          ]
+        }
+      ],
+      "unavailable": []
+    },
+    "truncated": false,
+    "diagnostics": []
+  },
+  "diagnostics": [],
   "run": {
     "status": "ok",
     "message": "build and simulation completed",
     "simulator": "verilator",
     "tool_version": "Verilator 5.020 2024-01-01 rev (Debian 5.020-1)",
-    "run_dir": "artifacts/case_01_fifo_wrap-mutant-directed-dfaf2379c8c5",
+    "run_dir": "artifacts/case_01_fifo_wrap-mutant-directed-5ca49d17447c",
     "steps": [
       {
         "name": "build",
@@ -144,12 +2326,12 @@
           "--top-module",
           "tb",
           "--Mdir",
-          "artifacts/case_01_fifo_wrap-mutant-directed-dfaf2379c8c5/obj",
+          "artifacts/case_01_fifo_wrap-mutant-directed-5ca49d17447c/obj",
           "benchmarks/case_01_fifo_wrap/tb/tb.sv",
           "benchmarks/case_01_fifo_wrap/rtl/mutant/fifo.sv"
         ],
         "exit_code": 0,
-        "duration_s": 6.177,
+        "duration_s": 7.99,
         "log": "build.log",
         "log_bytes_total": 3286,
         "log_truncated": false
@@ -157,16 +2339,16 @@
       {
         "name": "simulate",
         "argv": [
-          "artifacts/case_01_fifo_wrap-mutant-directed-dfaf2379c8c5/obj/Vtb",
+          "artifacts/case_01_fifo_wrap-mutant-directed-5ca49d17447c/obj/Vtb",
           "+stim=benchmarks/case_01_fifo_wrap/stim/directed.stim",
-          "+obs=artifacts/case_01_fifo_wrap-mutant-directed-dfaf2379c8c5/observed.jsonl",
-          "+vcd=artifacts/case_01_fifo_wrap-mutant-directed-dfaf2379c8c5/trace.vcd",
+          "+obs=artifacts/case_01_fifo_wrap-mutant-directed-5ca49d17447c/observed.jsonl",
+          "+vcd=artifacts/case_01_fifo_wrap-mutant-directed-5ca49d17447c/trace.vcd",
           "+cycle_limit=64"
         ],
         "exit_code": 0,
-        "duration_s": 0.051,
+        "duration_s": 0.052,
         "log": "simulate.log",
-        "log_bytes_total": 83,
+        "log_bytes_total": 81,
         "log_truncated": false
       }
     ],

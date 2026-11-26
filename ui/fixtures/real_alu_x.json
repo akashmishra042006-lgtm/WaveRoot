@@ -11,7 +11,10 @@
     "name": "track_a_waveform",
     "kind": "analysis"
   },
-  "causal_adapter": null,
+  "causal_adapter": {
+    "name": "track_b_causal",
+    "kind": "analysis"
+  },
   "primary_mode": "cycle",
   "comparisons": {
     "cycle": {
@@ -45,19 +48,439 @@
       "diagnostics": []
     }
   },
-  "causal": null,
-  "diagnostics": [
-    {
-      "code": "CAUSAL_UNAVAILABLE",
-      "message": "no causal-analysis adapter is configured; the failure is unlocalized"
-    }
-  ],
+  "causal": {
+    "schema_version": 1,
+    "provenance": {
+      "kind": "analysis",
+      "case_id": "case_04_alu_xprop",
+      "note": "Backward dependency slice computed by src.causal from the RTL and the trace. Suspects are ranked candidates for investigation, not proof of a root cause."
+    },
+    "status": "fail",
+    "failure": {
+      "kind": "unknown_value",
+      "mode": "cycle",
+      "signal_path": "tb.dut.out_data",
+      "clock_path": "tb.dut.clk",
+      "observation": {
+        "epoch": 0,
+        "cycle": 0,
+        "phase": "settled",
+        "time_ps": "25000"
+      },
+      "transaction_index": null,
+      "expected": {
+        "width": 8,
+        "bits": "00000000"
+      },
+      "actual": {
+        "width": 8,
+        "bits": "xxxxxxxx"
+      },
+      "detail": "out_data: expected 00000000 but observed xxxxxxxx at epoch 0 cycle 0 (settled, 25000 ps)"
+    },
+    "anchor_node_id": "out_data.e0c0.settled",
+    "nodes": [
+      {
+        "id": "out_data.e0c0.settled",
+        "signal_path": "tb.dut.out_data",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 0,
+          "phase": "settled",
+          "time_ps": "25000"
+        },
+        "value": {
+          "width": 8,
+          "bits": "xxxxxxxx"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 26,
+          "end_line": 26
+        }
+      },
+      {
+        "id": "sel_q.e0c0.before",
+        "signal_path": "tb.dut.sel_q",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 0,
+          "phase": "before",
+          "time_ps": "25000"
+        },
+        "value": {
+          "width": 1,
+          "bits": "x"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 18,
+          "end_line": 20
+        }
+      },
+      {
+        "id": "b.e0c0.before",
+        "signal_path": "tb.dut.b",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 0,
+          "phase": "before",
+          "time_ps": "25000"
+        },
+        "value": {
+          "width": 8,
+          "bits": "11111111"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 9,
+          "end_line": 9
+        }
+      },
+      {
+        "id": "a.e0c0.before",
+        "signal_path": "tb.dut.a",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 0,
+          "phase": "before",
+          "time_ps": "25000"
+        },
+        "value": {
+          "width": 8,
+          "bits": "00000000"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 8,
+          "end_line": 8
+        }
+      },
+      {
+        "id": "rst_n.e0c0.before",
+        "signal_path": "tb.dut.rst_n",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 0,
+          "phase": "before",
+          "time_ps": "25000"
+        },
+        "value": {
+          "width": 1,
+          "bits": "1"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 6,
+          "end_line": 6
+        }
+      },
+      {
+        "id": "in_valid.e0c0.before",
+        "signal_path": "tb.dut.in_valid",
+        "bit_range": null,
+        "observation": {
+          "epoch": 0,
+          "cycle": 0,
+          "phase": "before",
+          "time_ps": "25000"
+        },
+        "value": {
+          "width": 1,
+          "bits": "1"
+        },
+        "location": {
+          "source_id": "src0",
+          "line": 7,
+          "end_line": 7
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0001",
+        "source": "sel_q.e0c0.before",
+        "target": "out_data.e0c0.settled",
+        "edge_type": "sequential",
+        "role": "control",
+        "branch": "retained",
+        "reason": "`out_data <= sel_q ? b : a` executes just before the cycle 0 clock edge."
+      },
+      {
+        "id": "e0002",
+        "source": "b.e0c0.before",
+        "target": "out_data.e0c0.settled",
+        "edge_type": "sequential",
+        "role": "data",
+        "branch": "unknown",
+        "reason": "`?:` selection in `out_data <= sel_q ? b : a` is unknown: `sel_q` is unknown just before the cycle 0 clock edge."
+      },
+      {
+        "id": "e0003",
+        "source": "a.e0c0.before",
+        "target": "out_data.e0c0.settled",
+        "edge_type": "sequential",
+        "role": "data",
+        "branch": "unknown",
+        "reason": "`?:` selection in `out_data <= sel_q ? b : a` is unknown: `sel_q` is unknown just before the cycle 0 clock edge."
+      },
+      {
+        "id": "e0004",
+        "source": "rst_n.e0c0.before",
+        "target": "out_data.e0c0.settled",
+        "edge_type": "sequential",
+        "role": "control",
+        "branch": "retained",
+        "reason": "Condition `!rst_n` is 1'b0 just before the cycle 0 clock edge and decides which assignment to tb.dut.out_data executes."
+      },
+      {
+        "id": "e0005",
+        "source": "in_valid.e0c0.before",
+        "target": "out_data.e0c0.settled",
+        "edge_type": "sequential",
+        "role": "control",
+        "branch": "retained",
+        "reason": "Condition `in_valid` is 1'b1 just before the cycle 0 clock edge and decides which assignment to tb.dut.out_data executes."
+      }
+    ],
+    "suspects": [
+      {
+        "id": "s1",
+        "rank": 1,
+        "node_id": "out_data.e0c0.settled",
+        "location": {
+          "source_id": "src0",
+          "line": 26,
+          "end_line": 26
+        },
+        "reason": "`out_data <= sel_q ? b : a` executed at the cycle 0 clock edge (25000 ps) and changed tb.dut.out_data from 8'b00000000 to 8'bxxxxxxxx. This is the failing observation itself.",
+        "evidence_node_ids": [
+          "out_data.e0c0.settled"
+        ]
+      },
+      {
+        "id": "s2",
+        "rank": 2,
+        "node_id": "sel_q.e0c0.before",
+        "location": {
+          "source_id": "src0",
+          "line": 18,
+          "end_line": 20
+        },
+        "reason": "tb.dut.sel_q is 1'bx before cycle 0 of epoch 0, but the reset branch of its clocked process does not assign it, so its value is left over from before reset. It is 1 dependency hop and 1 storage boundary from the failing observation.",
+        "evidence_node_ids": [
+          "sel_q.e0c0.before",
+          "out_data.e0c0.settled"
+        ]
+      },
+      {
+        "id": "s3",
+        "rank": 3,
+        "node_id": "in_valid.e0c0.before",
+        "location": {
+          "source_id": "src0",
+          "line": 7,
+          "end_line": 7
+        },
+        "reason": "tb.dut.in_valid is a module input, driven from outside the analyzed RTL; it is 1'b1 just before the cycle 0 clock edge. It is 1 dependency hop and 1 storage boundary from the failing observation.",
+        "evidence_node_ids": [
+          "in_valid.e0c0.before",
+          "out_data.e0c0.settled"
+        ]
+      },
+      {
+        "id": "s4",
+        "rank": 4,
+        "node_id": "rst_n.e0c0.before",
+        "location": {
+          "source_id": "src0",
+          "line": 6,
+          "end_line": 6
+        },
+        "reason": "tb.dut.rst_n is a module input, driven from outside the analyzed RTL; it is 1'b1 just before the cycle 0 clock edge. It is 1 dependency hop and 1 storage boundary from the failing observation.",
+        "evidence_node_ids": [
+          "rst_n.e0c0.before",
+          "out_data.e0c0.settled"
+        ]
+      },
+      {
+        "id": "s5",
+        "rank": 5,
+        "node_id": "a.e0c0.before",
+        "location": {
+          "source_id": "src0",
+          "line": 8,
+          "end_line": 8
+        },
+        "reason": "tb.dut.a is a module input, driven from outside the analyzed RTL; it is 8'b00000000 just before the cycle 0 clock edge. It is 1 dependency hop and 1 storage boundary from the failing observation.",
+        "evidence_node_ids": [
+          "a.e0c0.before",
+          "out_data.e0c0.settled"
+        ]
+      },
+      {
+        "id": "s6",
+        "rank": 6,
+        "node_id": "b.e0c0.before",
+        "location": {
+          "source_id": "src0",
+          "line": 9,
+          "end_line": 9
+        },
+        "reason": "tb.dut.b is a module input, driven from outside the analyzed RTL; it is 8'b11111111 just before the cycle 0 clock edge. It is 1 dependency hop and 1 storage boundary from the failing observation.",
+        "evidence_node_ids": [
+          "b.e0c0.before",
+          "out_data.e0c0.settled"
+        ]
+      }
+    ],
+    "sources": [
+      {
+        "id": "src0",
+        "path": "rtl/mutant/alu.sv",
+        "sha256": "6d0f47fdbf9b4a1dd5f5988fa4138706ac985217be2fffaa080651eec94fdb8b"
+      }
+    ],
+    "assertions": [
+      {
+        "id": "a1",
+        "text": "// WaveRoot candidate assertion a1. Not validated: it restates one\n// trace observation and the golden expected value. Review before relying on it.\n// Failure: tb.dut.out_data expected 8'b00000000, observed 8'bxxxxxxxx at 25000 ps\n//   (epoch 0, cycle 0, settled).\n// Top suspect: tb.dut.out_data (rtl/mutant/alu.sv:26).\n// Cause terms (operands the suspect consumed): sel_q, b, a, in_valid.\nmodule waveroot_chk_a1 (\n  input logic clk,\n  input logic rst_n,\n  input logic sel_q,\n  input logic [7:0] b,\n  input logic [7:0] a,\n  input logic in_valid,\n  input logic [7:0] out_data\n);\n  property p_waveroot_a1;\n    @(posedge clk) disable iff (rst_n !== 1'b1)\n    ((sel_q === 1'bx) && (b === 8'b11111111) && (a === 8'b00000000) && (in_valid === 1'b1))\n    |=> (!$isunknown(out_data) && (out_data == 8'b00000000));\n  endproperty\n  a_waveroot_a1: assert property (p_waveroot_a1);\n  c_waveroot_a1: cover property (@(posedge clk) disable iff (rst_n !== 1'b1) ((sel_q === 1'bx) && (b === 8'b11111111) && (a === 8'b00000000) && (in_valid === 1'b1)));\nendmodule\nbind alu waveroot_chk_a1 u_waveroot_chk_a1 (.clk(clk), .rst_n(rst_n), .sel_q(sel_q), .b(b), .a(a), .in_valid(in_valid), .out_data(out_data));\n",
+        "validation": "candidate",
+        "tool": null
+      }
+    ],
+    "waveform": {
+      "start_ps": "15000",
+      "end_ps": "25001",
+      "signals": [
+        {
+          "signal_path": "tb.dut.clk",
+          "width": 1,
+          "initial": {
+            "width": 1,
+            "bits": "1"
+          },
+          "samples": [
+            {
+              "time_ps": "20000",
+              "value": {
+                "width": 1,
+                "bits": "0"
+              }
+            },
+            {
+              "time_ps": "25000",
+              "value": {
+                "width": 1,
+                "bits": "1"
+              }
+            }
+          ]
+        },
+        {
+          "signal_path": "tb.dut.out_data",
+          "width": 8,
+          "initial": {
+            "width": 8,
+            "bits": "00000000"
+          },
+          "samples": [
+            {
+              "time_ps": "25000",
+              "value": {
+                "width": 8,
+                "bits": "xxxxxxxx"
+              }
+            }
+          ]
+        },
+        {
+          "signal_path": "tb.dut.sel_q",
+          "width": 1,
+          "initial": {
+            "width": 1,
+            "bits": "x"
+          },
+          "samples": []
+        },
+        {
+          "signal_path": "tb.dut.b",
+          "width": 8,
+          "initial": {
+            "width": 8,
+            "bits": "00000000"
+          },
+          "samples": [
+            {
+              "time_ps": "20000",
+              "value": {
+                "width": 8,
+                "bits": "11111111"
+              }
+            }
+          ]
+        },
+        {
+          "signal_path": "tb.dut.a",
+          "width": 8,
+          "initial": {
+            "width": 8,
+            "bits": "00000000"
+          },
+          "samples": []
+        },
+        {
+          "signal_path": "tb.dut.rst_n",
+          "width": 1,
+          "initial": {
+            "width": 1,
+            "bits": "0"
+          },
+          "samples": [
+            {
+              "time_ps": "20000",
+              "value": {
+                "width": 1,
+                "bits": "1"
+              }
+            }
+          ]
+        },
+        {
+          "signal_path": "tb.dut.in_valid",
+          "width": 1,
+          "initial": {
+            "width": 1,
+            "bits": "0"
+          },
+          "samples": [
+            {
+              "time_ps": "20000",
+              "value": {
+                "width": 1,
+                "bits": "1"
+              }
+            }
+          ]
+        }
+      ],
+      "unavailable": []
+    },
+    "truncated": false,
+    "diagnostics": []
+  },
+  "diagnostics": [],
   "run": {
     "status": "ok",
     "message": "build and simulation completed",
     "simulator": "icarus",
     "tool_version": "Icarus Verilog version 12.0 (stable) ()",
-    "run_dir": "artifacts/case_04_alu_xprop-mutant-directed-1a0ac24cc509",
+    "run_dir": "artifacts/case_04_alu_xprop-mutant-directed-47b11d438d4a",
     "steps": [
       {
         "name": "build",
@@ -67,12 +490,12 @@
           "-s",
           "tb",
           "-o",
-          "artifacts/case_04_alu_xprop-mutant-directed-1a0ac24cc509/sim.vvp",
+          "artifacts/case_04_alu_xprop-mutant-directed-47b11d438d4a/sim.vvp",
           "benchmarks/case_04_alu_xprop/tb/tb.sv",
           "benchmarks/case_04_alu_xprop/rtl/mutant/alu.sv"
         ],
         "exit_code": 0,
-        "duration_s": 0.052,
+        "duration_s": 0.051,
         "log": "build.log",
         "log_bytes_total": 0,
         "log_truncated": false
@@ -81,16 +504,16 @@
         "name": "simulate",
         "argv": [
           "/usr/bin/vvp",
-          "artifacts/case_04_alu_xprop-mutant-directed-1a0ac24cc509/sim.vvp",
+          "artifacts/case_04_alu_xprop-mutant-directed-47b11d438d4a/sim.vvp",
           "+stim=benchmarks/case_04_alu_xprop/stim/directed.stim",
-          "+obs=artifacts/case_04_alu_xprop-mutant-directed-1a0ac24cc509/observed.jsonl",
-          "+vcd=artifacts/case_04_alu_xprop-mutant-directed-1a0ac24cc509/trace.vcd",
+          "+obs=artifacts/case_04_alu_xprop-mutant-directed-47b11d438d4a/observed.jsonl",
+          "+vcd=artifacts/case_04_alu_xprop-mutant-directed-47b11d438d4a/trace.vcd",
           "+cycle_limit=64"
         ],
         "exit_code": 0,
         "duration_s": 0.051,
         "log": "simulate.log",
-        "log_bytes_total": 208,
+        "log_bytes_total": 206,
         "log_truncated": false
       }
     ],
@@ -100,7 +523,7 @@
       "tb/tb.sv": "9d305ef5680b9ebc6ffc05a52b630ab4761086e987eb3d7b819141b2171badc5"
     },
     "trace": "trace.vcd",
-    "trace_sha256": "90b30cad0e53893fd5597a1fe8b7417bf976fe13eafd3d664b577236f97bb6f5",
+    "trace_sha256": "888a00e3bc43bc450c735b1fec4a020907d448637510d5c2b285b170a474f6b3",
     "trace_scope_prefix": ""
   }
 }

@@ -3,6 +3,7 @@ import { Assertions, SourceView, Suspects } from "./components/Evidence";
 import { ApiClient, apiBaseFromLocation } from "./api/client";
 import { Graph } from "./components/Graph";
 import { RunPanel } from "./components/RunPanel";
+import { HOSTED_BUILD, REPO_URL } from "./hosted";
 import { FailureStrip, Header, OutcomePanel, Unlocalized } from "./components/Summary";
 import { Waveform } from "./components/Waveform";
 import { useMediaQuery } from "./components/common";
@@ -60,7 +61,7 @@ const TABS = [
 ] as const;
 type TabId = (typeof TABS)[number]["id"];
 
-export function App({ client }: { client?: ApiClient } = {}) {
+export function App({ client, hosted = HOSTED_BUILD }: { client?: ApiClient; hosted?: boolean } = {}) {
   const api = useMemo(
     () => client ?? new ApiClient(apiBaseFromLocation(typeof window === "undefined" ? "" : window.location.search)),
     [client],
@@ -193,7 +194,22 @@ export function App({ client }: { client?: ApiClient } = {}) {
       </Header>
 
       <main>
-        <RunPanel client={api} onResult={onApiResult} />
+        {hosted ? (
+          <section className="run-panel" aria-label="About this viewer" data-testid="hosted-note">
+            <p>
+              <strong>Read-only viewer.</strong> These are real WaveRoot reports from Verilator and Icarus runs,
+              bundled with the page; nothing is sent anywhere. Running an analysis needs the simulators on your
+              own machine: see the <a href={REPO_URL} target="_blank" rel="noreferrer">README</a> to install
+              WaveRoot and run <code>uv run waveroot serve</code>.
+            </p>
+            <button type="button" className="primary" data-testid="hosted-example"
+              onClick={() => openDocument(SAMPLES.find((s) => s.id === "real-fifo-fail")?.document)}>
+              Open the FIFO example
+            </button>
+          </section>
+        ) : (
+          <RunPanel client={api} onResult={onApiResult} />
+        )}
         {view.kind === "empty" && (
           <section className="empty-state" data-testid="empty-state">
             <h1>Open a saved WaveRoot report</h1>

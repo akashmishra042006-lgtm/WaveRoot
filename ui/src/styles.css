@@ -662,5 +662,6 @@ button:hover {
 }
 .run-panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 0.5rem 0.75rem; margin-bottom: 0.75rem; }
 .run-panel p { margin: 0.2rem 0; }
+.run-panel a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
 .run-controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
 .run-error { color: var(--bad, #b00020); }

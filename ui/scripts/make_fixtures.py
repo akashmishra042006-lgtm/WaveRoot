@@ -124,6 +124,9 @@ def make_real() -> None:
         ("real_fifo_pass.json", "case_01_fifo_wrap", "correct", []),
         ("real_fifo_fail.json", "case_01_fifo_wrap", "mutant", []),
         ("real_alu_x.json", "case_04_alu_xprop", "mutant", []),
+        # The same failure with causal analysis switched off, so the UI keeps a
+        # real record of the unlocalized state (CAUSAL_UNAVAILABLE).
+        ("real_alu_x_unlocalized.json", "case_04_alu_xprop", "mutant", ["--causal", "none"]),
         # The same failure checked by the labeled benchmark self-check, so the UI
         # keeps a real record whose comparison is not waveform analysis.
         ("real_fifo_fail_selfcheck.json", "case_01_fifo_wrap", "mutant", ["--comparison", "self-check"]),
