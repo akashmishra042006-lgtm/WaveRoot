@@ -74,7 +74,7 @@ def main() -> int:
 
             # 1. No service: an explicit offline state, and saved reports still open.
             page.goto(f"http://127.0.0.1:{UI_PORT}/?api=http://127.0.0.1:1")
-            expect(page.get_by_test_id("service-offline")).to_contain_text("python -m src.app.cli serve")
+            expect(page.get_by_test_id("service-offline")).to_contain_text("uv run waveroot serve")
             page.get_by_test_id("sample-select").select_option("real-fifo-fail")
             expect(page.get_by_test_id("run-title")).to_be_visible()
 

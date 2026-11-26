@@ -7,6 +7,9 @@ import realFifoFail from "../fixtures/real_fifo_fail.json";
 import realFifoPass from "../fixtures/real_fifo_pass.json";
 import realFifoSelfCheck from "../fixtures/real_fifo_fail_selfcheck.json";
 import realAluX from "../fixtures/real_alu_x.json";
+import realAluXUnlocalized from "../fixtures/real_alu_x_unlocalized.json";
+import fifoMutantRtl from "../../benchmarks/case_01_fifo_wrap/rtl/mutant/fifo.sv?raw";
+import aluMutantRtl from "../../benchmarks/case_04_alu_xprop/rtl/mutant/alu.sv?raw";
 import realTimeout from "../fixtures/real_fifo_timeout.json";
 import inconclusive from "../fixtures/inconclusive.json";
 import sourceUnavailable from "../fixtures/source_unavailable.json";
@@ -26,6 +29,7 @@ export const SAMPLES: readonly Sample[] = [
   { id: "real-fifo-selfcheck", label: "FIFO mutant, benchmark self-check (real run)", group: "real", document: realFifoSelfCheck },
   { id: "real-fifo-pass", label: "FIFO correct, real Verilator run", group: "real", document: realFifoPass },
   { id: "real-alu-x", label: "ALU unknown value, real Icarus run", group: "real", document: realAluX },
+  { id: "real-alu-x-unlocalized", label: "ALU unknown value, real run without causal analysis", group: "real", document: realAluXUnlocalized },
   { id: "real-timeout", label: "FIFO run that timed out (real infrastructure error)", group: "real", document: realTimeout },
   { id: "state-inconclusive", label: "Inconclusive (synthetic)", group: "state", document: inconclusive },
   { id: "state-source", label: "Source unavailable (synthetic)", group: "state", document: sourceUnavailable },
@@ -43,4 +47,7 @@ export const GROUP_LABELS: Record<Sample["group"], string> = {
  * computed at load time and must match the report; it is not trusted by name. */
 export const BUNDLED_SOURCES: readonly { name: string; text: string }[] = [
   { name: "tests/fixtures/mock_fifo_wrap.sv", text: mockFifoSource },
+  // RTL behind the bundled real records, so their suspects open on verified source.
+  { name: "benchmarks/case_01_fifo_wrap/rtl/mutant/fifo.sv", text: fifoMutantRtl },
+  { name: "benchmarks/case_04_alu_xprop/rtl/mutant/alu.sv", text: aluMutantRtl },
 ];

@@ -11,7 +11,10 @@
     "name": "track_a_waveform",
     "kind": "analysis"
   },
-  "causal_adapter": null,
+  "causal_adapter": {
+    "name": "track_b_causal",
+    "kind": "analysis"
+  },
   "primary_mode": "cycle",
   "comparisons": {
     "cycle": {
@@ -40,7 +43,7 @@
     "message": "build and simulation completed",
     "simulator": "verilator",
     "tool_version": "Verilator 5.020 2024-01-01 rev (Debian 5.020-1)",
-    "run_dir": "artifacts/case_01_fifo_wrap-correct-directed-3e38fe9d9815",
+    "run_dir": "artifacts/case_01_fifo_wrap-correct-directed-9ea0002cd269",
     "steps": [
       {
         "name": "build",
@@ -52,12 +55,12 @@
           "--top-module",
           "tb",
           "--Mdir",
-          "artifacts/case_01_fifo_wrap-correct-directed-3e38fe9d9815/obj",
+          "artifacts/case_01_fifo_wrap-correct-directed-9ea0002cd269/obj",
           "benchmarks/case_01_fifo_wrap/tb/tb.sv",
           "benchmarks/case_01_fifo_wrap/rtl/correct/fifo.sv"
         ],
         "exit_code": 0,
-        "duration_s": 7.279,
+        "duration_s": 7.911,
         "log": "build.log",
         "log_bytes_total": 3288,
         "log_truncated": false
@@ -65,16 +68,16 @@
       {
         "name": "simulate",
         "argv": [
-          "artifacts/case_01_fifo_wrap-correct-directed-3e38fe9d9815/obj/Vtb",
+          "artifacts/case_01_fifo_wrap-correct-directed-9ea0002cd269/obj/Vtb",
           "+stim=benchmarks/case_01_fifo_wrap/stim/directed.stim",
-          "+obs=artifacts/case_01_fifo_wrap-correct-directed-3e38fe9d9815/observed.jsonl",
-          "+vcd=artifacts/case_01_fifo_wrap-correct-directed-3e38fe9d9815/trace.vcd",
+          "+obs=artifacts/case_01_fifo_wrap-correct-directed-9ea0002cd269/observed.jsonl",
+          "+vcd=artifacts/case_01_fifo_wrap-correct-directed-9ea0002cd269/trace.vcd",
           "+cycle_limit=64"
         ],
         "exit_code": 0,
         "duration_s": 0.051,
         "log": "simulate.log",
-        "log_bytes_total": 83,
+        "log_bytes_total": 81,
         "log_truncated": false
       }
     ],

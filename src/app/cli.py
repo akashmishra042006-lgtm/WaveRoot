@@ -56,7 +56,7 @@ DEFAULT_ARTIFACTS = Path("artifacts/runs")
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="python -m src.app.cli", description=__doc__.split("\n\n")[0])
+    parser = argparse.ArgumentParser(prog="waveroot", description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
 
     analyze = sub.add_parser("analyze", help="run one benchmark variant and compare it")

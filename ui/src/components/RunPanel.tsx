@@ -18,7 +18,7 @@ interface Props {
   onResult: (record: unknown, sources: SourceText[], problems: string[]) => void;
 }
 
-const SERVE_COMMAND = "python -m src.app.cli serve --dev";
+const SERVE_COMMAND = "uv run waveroot serve --dev";
 
 /** Runs a benchmark through the local service. The service being absent is a
  * normal state: saved reports still open without it. */

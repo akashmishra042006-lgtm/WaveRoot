@@ -48,12 +48,25 @@ paths were rewritten to be repository-relative. The others are synthetic UI
 states derived from the mock fixture; the three invalid ones are confirmed to
 be rejected by `src/contracts.py` as well (`tests/track_c/test_ui_fixtures.py`).
 
-## Not yet
+The real FIFO and ALU failures carry Track B's causal report (regenerated
+after #27); `real_alu_x_unlocalized.json` is the same ALU run with
+`--causal none`, kept for the unlocalized state. The RTL behind them is bundled
+(`src/samples.ts`) and matched to each report by SHA-256, never by name.
 
-- No live API: the offline/API-error state belongs to C06.
-- Causal graphs come only from fixtures until Track B lands; waveform windows
-  arrive with Track A's provider. Real run records today show the observed
-  failure as unlocalized, with the reason.
+## Public read-only viewer (Vercel)
+
+`VITE_WAVEROOT_HOSTED=1 npm run build` builds a viewer that never contacts an
+analysis service: the run panel is replaced by a note that points to the
+README, and visitors open the bundled real reports or their own
+`report.json`. Analyses need Verilator/Icarus, so they only run locally
+(`uv run waveroot serve`).
+
+`ui/vercel.json` holds the build settings and response headers (a
+Content-Security-Policy with `connect-src 'none'`, no framing, no referrer). To
+deploy, import the repository in Vercel and set **Root Directory** to `ui`; keep
+"Include files outside the Root Directory" on, because the bundled samples read
+`tests/fixtures/` and `benchmarks/`. Check a build locally with the headers
+applied by serving `ui/dist` with them and opening it in a browser.
 
 ### Dark dashboard (React 19)
 
