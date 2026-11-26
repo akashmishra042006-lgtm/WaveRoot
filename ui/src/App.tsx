@@ -198,7 +198,7 @@ export function App({ client }: { client?: ApiClient } = {}) {
           <section className="empty-state" data-testid="empty-state">
             <h1>Open a saved WaveRoot report</h1>
             <p>
-              Choose a run record from <code>python -m src.app.cli analyze … --json</code> (or its saved{" "}
+              Choose a run record from <code>uv run waveroot analyze … --json</code> (or its saved{" "}
               <code>report.json</code>), or pick a bundled document. Opening a report never runs a simulation.
             </p>
             <button type="button" className="primary" onClick={() => fileInput.current?.click()}>Open report…</button>{" "}

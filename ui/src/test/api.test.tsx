@@ -39,7 +39,7 @@ describe("the local service is optional", () => {
     render(<App client={client} />);
     const offline = await screen.findByTestId("service-offline");
     expect(offline).toHaveTextContent("not reachable");
-    expect(offline).toHaveTextContent("python -m src.app.cli serve --dev");
+    expect(offline).toHaveTextContent("uv run waveroot serve --dev");
     await user.selectOptions(screen.getByTestId("sample-select"), "real-fifo-fail");
     expect(await screen.findByTestId("run-title")).toBeInTheDocument();
     expect(screen.getByTestId("service-offline")).toBeInTheDocument();
