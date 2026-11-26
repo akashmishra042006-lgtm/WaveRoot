@@ -4,6 +4,8 @@ version = "0.1.0"
 description = "Local-first RTL waveform comparison and causal debugging"
 readme = "README.md"
 requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = [
     "pydantic>=2,<3",
     "pyslang>=12,<13",
