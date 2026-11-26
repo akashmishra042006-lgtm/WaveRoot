@@ -88,3 +88,7 @@ schema 1; a change in meaning needs a new schema version.
 Keep each branch within its track. Keep generated simulations, traces, and
 reports in `artifacts/`; keep small, deterministic test inputs in
 `tests/fixtures/`.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
